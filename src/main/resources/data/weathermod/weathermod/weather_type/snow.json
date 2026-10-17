@@ -6,7 +6,7 @@
   },
   "climate": {
     "min_temperature": -1.0,
-    "max_temperature": 0.15,
+    "max_temperature": 0.3,
     "min_humidity": 0.2,
     "max_humidity": 1.0
   },
@@ -21,5 +21,6 @@
     "rain_level": 1.0,
     "thunder_level": 0.0,
     "haze_strength": 0.4
-  }
+  },
+  "precipitation": "snow"
 }

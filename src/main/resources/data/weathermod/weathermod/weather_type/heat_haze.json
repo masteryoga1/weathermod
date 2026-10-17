@@ -5,7 +5,7 @@
     "max": 1.0
   },
   "climate": {
-    "min_temperature": 1.5
+    "min_temperature": 1.2
   },
   "duration_seconds": {
     "min": 600.0,
@@ -19,7 +19,9 @@
     "thunder_level": 0.0,
     "haze_strength": 0.5
   },
+  "precipitation": "none",
   "dimensions": [
+    "minecraft:overworld",
     "minecraft:the_nether"
   ]
 }
