@@ -54,7 +54,7 @@ public final class DepositionSystem {
         int layersTarget = snow
             ? DepositionMath.snowLayersTarget(level.getGameRules().getInt(GameRules.RULE_SNOW_ACCUMULATION_HEIGHT))
             : 0;
-        int seaLevel = level.getSeaLevel();
+        int seaLevel = level.getChunkSource().getGenerator().getSeaLevel();
         int changed = 0;
         for (int attempt = 0; attempt < budget; attempt++) {
             double[] point = DepositionMath.randomPointInDisc(storm.x(), storm.z(), storm.radius(), random);
@@ -127,7 +127,8 @@ public final class DepositionSystem {
             return false;
         }
         FluidState fluid = level.getFluidState(water);
-        if (!fluid.isSource() || !fluid.is(FluidTags.WATER) || !(level.getBlockState(water).getBlock() instanceof LiquidBlock)) {
+        if (!fluid.isSource() || !fluid.is(FluidTags.WATER)
+            || !(level.getBlockState(water).getBlock() instanceof LiquidBlock)) {
             return false;
         }
         boolean surrounded = level.isWaterAt(water.west()) && level.isWaterAt(water.east())

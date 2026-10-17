@@ -84,6 +84,7 @@ class TypeSelectorTest {
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public boolean is(Holder<Biome> holder) {
             return holder == this;
         }

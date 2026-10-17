@@ -3,8 +3,10 @@ package com.weathermod.config;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
- * Server-side settings: destruction, budgets, storm frequency and network sync rate. Stored per world in
- * {@code serverconfig/weathermod-server.toml} and synced to clients that join.
+ * Server-side settings: destruction, budgets, storm frequency, the director's spawn interval, the vanilla weather
+ * bridge, snow and ice deposition, the built-in seasons and network sync rate. Written to
+ * {@code config/weathermod-server.toml} (a copy under the world's {@code serverconfig} folder overrides it) and
+ * synced to clients that join.
  */
 public final class ServerConfig {
     /** How much storms may change the world. */
@@ -15,12 +17,26 @@ public final class ServerConfig {
     public static final ModConfigSpec.IntValue maxFlyingBlocksPerStorm;
     /** Multiplier on natural storm spawn rate; 0 disables natural storms. */
     public static final ModConfigSpec.DoubleValue stormFrequency;
+    /** Seconds between the director's natural spawn attempts at a storm frequency of one. */
+    public static final ModConfigSpec.IntValue naturalSpawnIntervalSeconds;
     /** Hard cap on simultaneous storms in one dimension. */
     public static final ModConfigSpec.IntValue maxStormsPerDimension;
     /** Ticks between storm delta packets sent to interested players. */
     public static final ModConfigSpec.IntValue syncIntervalTicks;
     /** Seconds that must pass after severe weather before the next severe storm may form. */
     public static final ModConfigSpec.IntValue severeWeatherCooldownSeconds;
+    /** Whether vanilla rain and thunder follow the mod's precipitation storms. */
+    public static final ModConfigSpec.BooleanValue vanillaWeatherBridge;
+    /** Whether snow storms lay snow layers on the ground. */
+    public static final ModConfigSpec.BooleanValue snowAccumulation;
+    /** Whether snow storms freeze still water into ice. */
+    public static final ModConfigSpec.BooleanValue iceFormation;
+    /** Deposition attempts per precipitation storm per tick; 0 disables deposition. */
+    public static final ModConfigSpec.IntValue depositionBlocksPerTick;
+    /** Length of the built-in seasonal year in days; 0 disables the built-in seasons. */
+    public static final ModConfigSpec.IntValue builtInYearLengthDays;
+    /** Whether sleeping through the night ends the precipitation storms over the sleepers. */
+    public static final ModConfigSpec.BooleanValue endStormsOnSleep;
 
     /** The built specification handed to NeoForge. */
     public static final ModConfigSpec SPEC;
@@ -51,6 +67,12 @@ public final class ServerConfig {
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "stormFrequency")
                 .defineInRange("stormFrequency", 1.0D, 0.0D, 10.0D);
 
+        naturalSpawnIntervalSeconds = builder
+                .comment("Real seconds between the storm director's natural spawn attempts at a storm frequency of 1.0.",
+                        "Each wait is divided by stormFrequency and varied by up to half either way.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "naturalSpawnIntervalSeconds")
+                .defineInRange("naturalSpawnIntervalSeconds", 240, 10, 86400);
+
         maxStormsPerDimension = builder
                 .comment("Maximum number of storms that may exist at the same time in one dimension.",
                         "Both natural spawns and commands respect this limit.")
@@ -67,6 +89,45 @@ public final class ServerConfig {
                 .comment("Real seconds that must pass after a severe storm ends before another one may form in the same dimension.")
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "severeWeatherCooldownSeconds")
                 .defineInRange("severeWeatherCooldownSeconds", 900, 0, 86400);
+
+        vanillaWeatherBridge = builder
+                .comment("Keep the vanilla rain and thunder flags in step with the mod's storms.",
+                        "Vanilla rains while a precipitation storm covers a player and is dry otherwise,",
+                        "so crops, cauldrons and fishing respond. Off leaves the vanilla weather cycle alone.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "vanillaWeatherBridge")
+                .define("vanillaWeatherBridge", true);
+
+        snowAccumulation = builder
+                .comment("Let snow storms lay snow layers on the ground under them,",
+                        "up to the snowAccumulationHeight game rule.",
+                        "Ignored while destructionMode is VISUAL_ONLY.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "snowAccumulation")
+                .define("snowAccumulation", true);
+
+        iceFormation = builder
+                .comment("Let snow storms freeze still water under them into ice.",
+                        "Ignored while destructionMode is VISUAL_ONLY.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "iceFormation")
+                .define("iceFormation", true);
+
+        depositionBlocksPerTick = builder
+                .comment("Positions each precipitation storm tries to lay snow or ice on per tick.",
+                        "0 disables deposition, higher values build snow faster at more server cost.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "depositionBlocksPerTick")
+                .defineInRange("depositionBlocksPerTick", 4, 0, 64);
+
+        builtInYearLengthDays = builder
+                .comment("Length of the built-in seasonal year in game days; the four seasons each take a quarter of it.",
+                        "0 disables the built-in seasons.",
+                        "Ignored when Serene Seasons is installed, which then drives the seasons.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "builtInYearLengthDays")
+                .defineInRange("builtInYearLengthDays", 28, 0, 3650);
+
+        endStormsOnSleep = builder
+                .comment("End the precipitation storms covering players who sleep through the night, as vanilla ends its rain.",
+                        "The storms ramp down instead of vanishing at once.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "endStormsOnSleep")
+                .define("endStormsOnSleep", true);
 
         SPEC = builder.build();
     }

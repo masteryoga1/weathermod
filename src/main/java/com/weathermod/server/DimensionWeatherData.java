@@ -3,6 +3,9 @@ package com.weathermod.server;
 import com.weathermod.WeatherMod;
 import com.weathermod.core.WeatherType;
 import com.weathermod.network.StormSnapshot;
+import com.weathermod.server.climate.ClimateField;
+import com.weathermod.server.climate.SeasonProviders;
+import com.weathermod.server.director.DirectorState;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -20,7 +23,8 @@ import org.jetbrains.annotations.Nullable;
 
 /**
  * The weather of one dimension, persisted with the level so storms survive restarts: the storm list, the id
- * counter, the wind and the simulation tick counter.
+ * counter, the wind, the storm director's state and the simulation tick counter. The climate field is derived from
+ * the level and the config, so it is built on first use instead of being saved.
  */
 public final class DimensionWeatherData extends SavedData {
     /** File name under the dimension's {@code data} folder, without extension. */
@@ -33,14 +37,18 @@ public final class DimensionWeatherData extends SavedData {
     private static final String KEY_NEXT_STORM_ID = "NextStormId";
     private static final String KEY_WIND = "Wind";
     private static final String KEY_TICK_COUNTER = "TickCounter";
+    private static final String KEY_DIRECTOR = "Director";
 
     private final List<StormInstance> storms = new ArrayList<>();
     private final List<StormInstance> stormsView = Collections.unmodifiableList(storms);
     private int nextStormId = 1;
     private WindState wind;
     private int tickCounter;
+    private DirectorState director = new DirectorState();
+    @Nullable
+    private ClimateField climate;
 
-    /** Creates empty data with a random wind, as used for a dimension that has no saved weather yet. */
+    /** Creates empty data with a random wind and a fresh director, as used for a dimension that has no saved weather yet. */
     public DimensionWeatherData() {
         this.wind = WindState.random(RandomSource.create());
     }
@@ -60,10 +68,15 @@ public final class DimensionWeatherData extends SavedData {
         tag.putInt(KEY_NEXT_STORM_ID, nextStormId);
         tag.put(KEY_WIND, wind.save());
         tag.putInt(KEY_TICK_COUNTER, tickCounter);
+        tag.put(KEY_DIRECTOR, director.save());
         return tag;
     }
 
-    /** Reads data written by {@link #save(CompoundTag, HolderLookup.Provider)}; the id counter is repaired if it lags behind the stored storms. */
+    /**
+     * Reads data written by {@link #save(CompoundTag, HolderLookup.Provider)}; the id counter is repaired if it lags
+     * behind the stored storms, and a tag without a director entry, as saved before the director existed, gets a
+     * fresh director state.
+     */
     public static DimensionWeatherData load(CompoundTag tag, HolderLookup.Provider registries) {
         DimensionWeatherData data = new DimensionWeatherData();
         int highestId = 0;
@@ -78,6 +91,9 @@ public final class DimensionWeatherData extends SavedData {
             data.wind = WindState.load(tag.getCompound(KEY_WIND));
         }
         data.tickCounter = Math.max(0, tag.getInt(KEY_TICK_COUNTER));
+        if (tag.contains(KEY_DIRECTOR, Tag.TAG_COMPOUND)) {
+            data.director = DirectorState.load(tag.getCompound(KEY_DIRECTOR));
+        }
         WeatherMod.LOGGER.debug("Loaded {} storm(s) from {}", data.storms.size(), DATA_NAME);
         return data;
     }
@@ -156,6 +172,17 @@ public final class DimensionWeatherData extends SavedData {
         return stormsView;
     }
 
+    /** How many live storms the director spawned, see {@link StormInstance#isNatural()}. */
+    public int naturalStormCount() {
+        int count = 0;
+        for (StormInstance storm : storms) {
+            if (storm.isNatural()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     /** Snapshots of the storms whose interest radius covers the given horizontal position. */
     public List<StormSnapshot> snapshotsNear(double x, double z) {
         List<StormSnapshot> result = new ArrayList<>();
@@ -170,6 +197,25 @@ public final class DimensionWeatherData extends SavedData {
     /** The dimension's wind. Mutating it is allowed; the simulator persists it every tick. */
     public WindState wind() {
         return wind;
+    }
+
+    /** The storm director's state for this dimension, persisted under {@code "Director"}. Mutating it is allowed. */
+    public DirectorState director() {
+        return director;
+    }
+
+    /**
+     * The dimension's climate field, built on first use from the level's seed and the configured season provider
+     * and kept for the life of this data. It is derived, not saved: a reloaded world rebuilds it.
+     */
+    public ClimateField climate(ServerLevel level) {
+        ClimateField field = climate;
+        if (field == null) {
+            field = ClimateField.forLevel(level, SeasonProviders.create(WeatherManager.builtInYearLengthDays()));
+            climate = field;
+            WeatherMod.LOGGER.debug("Built climate field {} for {}", field, level.dimension().location());
+        }
+        return field;
     }
 
     /** The id the next spawned storm will receive. */

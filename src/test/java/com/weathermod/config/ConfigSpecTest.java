@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.weathermod.server.WeatherManager;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
@@ -18,11 +19,36 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 import org.junit.jupiter.api.Test;
 
 /**
- * Checks the config specs build with the documented defaults and that every translation key they
- * declare has an English string. Needs no Minecraft bootstrap.
+ * Checks the config specs build with the documented defaults, that the pre-load defaults in {@code WeatherManager}
+ * agree with them, and that every translation key they declare has an English string. Needs no Minecraft bootstrap.
  */
 class ConfigSpecTest {
     private static final String LANG_PATH = "/assets/weathermod/lang/en_us.json";
+    private static final String COMMAND_PREFIX = "command.weathermod.";
+
+    /** Every command translation key the server commands and the client commands use. */
+    private static final List<String> COMMAND_KEYS = List.of(
+        "climate.header", "climate.sample", "climate.season", "climate.season_none",
+        "climate.kind.none", "climate.kind.rain", "climate.kind.sleet", "climate.kind.snow",
+        "client.overlay.config_forced", "client.overlay.off", "client.overlay.on",
+        "client.storms.climate", "client.storms.climate_no_season", "client.storms.climate_unknown",
+        "client.storms.entry", "client.storms.header", "client.storms.none",
+        "client.storms.kind.none", "client.storms.kind.rain", "client.storms.kind.sleet", "client.storms.kind.snow",
+        "client.storms.wind", "client.storms.wind_gust", "client.storms.wind_unknown",
+        "dimension_disabled",
+        "director.pause.already", "director.paused", "director.resume.already", "director.resumed",
+        "director.spawn_failed_no_type", "director.spawned",
+        "director.status.frequency", "director.status.frequency_off", "director.status.header",
+        "director.status.last_spawn", "director.status.no_spawn", "director.status.paused",
+        "director.status.running", "director.status.storms",
+        "info.bridge_off", "info.bridge_on", "info.config_not_loaded", "info.destruction_mode",
+        "info.director_paused", "info.director_running", "info.disabled", "info.enabled", "info.gusting",
+        "info.header", "info.season", "info.season_none", "info.storms", "info.wind", "info.wind_regime",
+        "no", "yes",
+        "storm.cleared", "storm.intensified", "storm.list.empty", "storm.list.entry", "storm.list.header",
+        "storm.list.natural", "storm.list.steered", "storm.not_found", "storm.released", "storm.removed",
+        "storm.spawn_failed_full", "storm.spawned", "storm.steered",
+        "wind.regime.breeze", "wind.regime.calm", "wind.regime.gale", "wind.regime.windy", "wind.set");
 
     @Test
     void serverDefaultsMatchSpec() {
@@ -30,9 +56,31 @@ class ConfigSpecTest {
         assertEquals(16, ServerConfig.blockBudgetPerTick.getDefault());
         assertEquals(48, ServerConfig.maxFlyingBlocksPerStorm.getDefault());
         assertEquals(1.0D, ServerConfig.stormFrequency.getDefault());
+        assertEquals(240, ServerConfig.naturalSpawnIntervalSeconds.getDefault());
         assertEquals(8, ServerConfig.maxStormsPerDimension.getDefault());
         assertEquals(10, ServerConfig.syncIntervalTicks.getDefault());
         assertEquals(900, ServerConfig.severeWeatherCooldownSeconds.getDefault());
+        assertEquals(true, ServerConfig.vanillaWeatherBridge.getDefault());
+        assertEquals(true, ServerConfig.snowAccumulation.getDefault());
+        assertEquals(true, ServerConfig.iceFormation.getDefault());
+        assertEquals(4, ServerConfig.depositionBlocksPerTick.getDefault());
+        assertEquals(28, ServerConfig.builtInYearLengthDays.getDefault());
+        assertEquals(true, ServerConfig.endStormsOnSleep.getDefault());
+    }
+
+    @Test
+    void preLoadDefaultsAgreeWithSpec() {
+        assertEquals(ServerConfig.destructionMode.getDefault(), WeatherManager.DEFAULT_DESTRUCTION_MODE);
+        assertEquals(ServerConfig.stormFrequency.getDefault(), WeatherManager.DEFAULT_STORM_FREQUENCY);
+        assertEquals(ServerConfig.naturalSpawnIntervalSeconds.getDefault(), WeatherManager.DEFAULT_NATURAL_SPAWN_INTERVAL_SECONDS);
+        assertEquals(ServerConfig.maxStormsPerDimension.getDefault(), WeatherManager.DEFAULT_MAX_STORMS_PER_DIMENSION);
+        assertEquals(ServerConfig.syncIntervalTicks.getDefault(), WeatherManager.DEFAULT_SYNC_INTERVAL_TICKS);
+        assertEquals(ServerConfig.vanillaWeatherBridge.getDefault(), WeatherManager.DEFAULT_VANILLA_WEATHER_BRIDGE);
+        assertEquals(ServerConfig.snowAccumulation.getDefault(), WeatherManager.DEFAULT_SNOW_ACCUMULATION);
+        assertEquals(ServerConfig.iceFormation.getDefault(), WeatherManager.DEFAULT_ICE_FORMATION);
+        assertEquals(ServerConfig.depositionBlocksPerTick.getDefault(), WeatherManager.DEFAULT_DEPOSITION_BLOCKS_PER_TICK);
+        assertEquals(ServerConfig.builtInYearLengthDays.getDefault(), WeatherManager.DEFAULT_BUILT_IN_YEAR_LENGTH_DAYS);
+        assertEquals(ServerConfig.endStormsOnSleep.getDefault(), WeatherManager.DEFAULT_END_STORMS_ON_SLEEP);
     }
 
     @Test
@@ -74,6 +122,32 @@ class ConfigSpecTest {
     }
 
     @Test
+    void simulationAndImpactRangesAreEnforced() {
+        ModConfigSpec.ValueSpec interval = ServerConfig.SPEC.getSpec().get("naturalSpawnIntervalSeconds");
+        assertTrue(interval.test(10));
+        assertTrue(interval.test(86400));
+        assertFalse(interval.test(9));
+        assertFalse(interval.test(86401));
+
+        ModConfigSpec.ValueSpec deposition = ServerConfig.SPEC.getSpec().get("depositionBlocksPerTick");
+        assertTrue(deposition.test(0), "zero attempts switches deposition off and must be allowed");
+        assertTrue(deposition.test(64));
+        assertFalse(deposition.test(-1));
+        assertFalse(deposition.test(65));
+
+        ModConfigSpec.ValueSpec yearLength = ServerConfig.SPEC.getSpec().get("builtInYearLengthDays");
+        assertTrue(yearLength.test(0), "zero days disables the built-in seasons and must be allowed");
+        assertTrue(yearLength.test(3650));
+        assertFalse(yearLength.test(-1));
+        assertFalse(yearLength.test(3651));
+
+        ModConfigSpec.ValueSpec bridge = ServerConfig.SPEC.getSpec().get("vanillaWeatherBridge");
+        assertTrue(bridge.test(true));
+        assertTrue(bridge.test(false));
+        assertFalse(bridge.test("yes"));
+    }
+
+    @Test
     void destructionModeHelpers() {
         assertTrue(DestructionMode.FULL.ripsBlocks());
         assertTrue(DestructionMode.FULL.affectsEntities());
@@ -97,6 +171,25 @@ class ConfigSpecTest {
         collectMissing(lang, CommonConfig.SPEC, missing);
 
         assertTrue(missing.isEmpty(), "Missing translation keys in " + LANG_PATH + ": " + missing);
+    }
+
+    @Test
+    void everyCommandTranslationKeyHasAnEnglishString() throws Exception {
+        JsonObject lang = loadLang();
+        List<String> missing = new ArrayList<>();
+        for (String key : COMMAND_KEYS) {
+            checkKey(lang, COMMAND_PREFIX + key, missing);
+        }
+        assertTrue(missing.isEmpty(), "Missing command translation keys in " + LANG_PATH + ": " + missing);
+    }
+
+    @Test
+    void langKeysAreSorted() throws Exception {
+        JsonObject lang = loadLang();
+        List<String> keys = new ArrayList<>(lang.keySet());
+        List<String> sorted = new ArrayList<>(keys);
+        sorted.sort(null);
+        assertEquals(sorted, keys, "keys in " + LANG_PATH + " must be sorted");
     }
 
     private static void collectMissing(JsonObject lang, ModConfigSpec spec, List<String> missing) {

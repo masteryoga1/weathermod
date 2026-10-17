@@ -245,7 +245,8 @@ public final class StormDirector {
     private static Optional<Holder<WeatherType>> pickType(ServerLevel level, DimensionWeatherData data,
                                                           SpawnPlanner.Plan plan, RandomSource random) {
         ClimateSample climate = data.climate(level).sample(level, plan.x(), plan.z());
-        Holder<Biome> biome = level.getBiome(BlockPos.containing(plan.x(), level.getSeaLevel(), plan.z()));
+        int seaLevel = level.getChunkSource().getGenerator().getSeaLevel();
+        Holder<Biome> biome = level.getBiome(BlockPos.containing(plan.x(), seaLevel, plan.z()));
         Set<WeatherFamily> supported = FamilySystems.supported();
 
         List<TypeSelector.Candidate<Holder<WeatherType>>> candidates = new ArrayList<>();

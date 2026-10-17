@@ -8,14 +8,16 @@ import com.weathermod.network.StormSnapshot;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 
 /**
- * One storm in a dimension, simulated on the server. It moves with the wind unless a command steers it, ages
- * toward its maximum age and ramps its intensity in over the first tenth of its life and out over the last fifth.
+ * One storm in a dimension, simulated on the server. It moves with the wind, turned by a heading bias the director
+ * sets, unless a command steers it; it ages toward its maximum age and ramps its intensity in over the first tenth
+ * of its life and out over the last fifth. The director may cut that life short with {@link #endSoon()}.
  */
 public final class StormInstance {
     /** Cloud base height every new storm starts at. */
@@ -41,6 +43,9 @@ public final class StormInstance {
     private static final String KEY_RADIUS = "Radius";
     private static final String KEY_INTEREST_RADIUS = "InterestRadius";
     private static final String KEY_STEERED = "Steered";
+    private static final String KEY_NATURAL = "Natural";
+    private static final String KEY_TICKS_UNSEEN = "TicksUnseen";
+    private static final String KEY_HEADING_BIAS = "HeadingBias";
 
     private final int id;
     private final ResourceKey<WeatherType> type;
@@ -56,11 +61,15 @@ public final class StormInstance {
     private float radius;
     private float interestRadius;
     private boolean steered;
+    private boolean natural;
+    private int ticksUnseen;
+    private float headingBiasDegrees;
     private boolean dirty;
 
     /**
      * Creates a storm from raw values. {@code peakIntensity} is the intensity at the plateau of its life; the
-     * current intensity is derived from it and the age. New storms start dirty so they are synced at once.
+     * current intensity is derived from it and the age. New storms start dirty so they are synced at once, are not
+     * natural, have no heading bias and have not been unseen.
      */
     public StormInstance(int id, ResourceKey<WeatherType> type, double x, double y, double z, float headingDegrees,
                          float speed, float peakIntensity, int ageTicks, int maxAgeTicks, float radius,
@@ -78,6 +87,9 @@ public final class StormInstance {
         this.radius = Math.max(0.0F, radius);
         this.interestRadius = Math.max(0.0F, interestRadius);
         this.intensity = this.peakIntensity * lifeEnvelope(this.ageTicks, this.maxAgeTicks);
+        this.natural = false;
+        this.ticksUnseen = 0;
+        this.headingBiasDegrees = 0.0F;
         this.dirty = true;
     }
 
@@ -98,12 +110,24 @@ public final class StormInstance {
     }
 
     /**
-     * Advances the storm by one tick: follows the wind unless steered, moves along its heading, ages, and
-     * recomputes the intensity from the life envelope. Always marks the storm dirty.
+     * Creates a storm exactly like {@link #create} and marks it as spawned by the director, so it counts toward
+     * the natural storm cap.
+     */
+    public static StormInstance createNatural(int id, Holder<WeatherType> type, double x, double z,
+                                              RandomSource random) {
+        StormInstance storm = create(id, type, x, z, random);
+        storm.markNatural();
+        return storm;
+    }
+
+    /**
+     * Advances the storm by one tick: unless steered, takes the wind direction turned by the heading bias as its
+     * heading and the wind speed as its speed; then moves along its heading, ages, and recomputes the intensity
+     * from the life envelope. Always marks the storm dirty.
      */
     public void tick(WindState wind) {
         if (!steered) {
-            headingDegrees = wind.directionDegrees();
+            headingDegrees = Headings.wrapDegrees(wind.directionDegrees() + headingBiasDegrees);
             speed = wind.speed();
         }
         double blocksThisTick = speed / SharedConstants.TICKS_PER_SECOND;
@@ -137,6 +161,32 @@ public final class StormInstance {
         return 1.0F;
     }
 
+    /** The length of this storm's ramp-down in ticks: {@link #RAMP_DOWN_FRACTION} of its maximum age, rounded. */
+    public int rampDownTicks() {
+        return Math.round(RAMP_DOWN_FRACTION * maxAgeTicks);
+    }
+
+    /**
+     * Cuts the storm's life short: when more than one ramp-down length remains, the maximum age is pulled in to the
+     * current age plus the ramp-down length ({@link #RAMP_DOWN_FRACTION} of the old maximum age), so the storm has
+     * at most one ramp-down length left to live. The current intensity stays continuous: the peak intensity is
+     * recomputed so the life envelope at the new maximum age reproduces it. A storm with no more than one
+     * ramp-down length left is left alone, so repeated calls settle quickly.
+     */
+    public void endSoon() {
+        int rampDown = rampDownTicks();
+        if (remainingTicks() <= rampDown) {
+            return;
+        }
+        int newMaxAge = Math.max(ageTicks + 1, ageTicks + rampDown);
+        float envelope = lifeEnvelope(ageTicks, newMaxAge);
+        if (envelope > 0.0F) {
+            peakIntensity = Mth.clamp(intensity / envelope, 0.0F, 1.0F);
+        }
+        maxAgeTicks = newMaxAge;
+        dirty = true;
+    }
+
     /** Writes the storm to a new compound tag. The dirty flag is transient and not written. */
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
@@ -154,12 +204,16 @@ public final class StormInstance {
         tag.putFloat(KEY_RADIUS, radius);
         tag.putFloat(KEY_INTEREST_RADIUS, interestRadius);
         tag.putBoolean(KEY_STEERED, steered);
+        tag.putBoolean(KEY_NATURAL, natural);
+        tag.putInt(KEY_TICKS_UNSEEN, ticksUnseen);
+        tag.putFloat(KEY_HEADING_BIAS, headingBiasDegrees);
         return tag;
     }
 
     /**
-     * Reads a storm written by {@link #save()}. An unparseable type id falls back to the placeholder type;
-     * missing radii fall back to the weather type defaults. The loaded storm is not dirty.
+     * Reads a storm written by {@link #save()}. An unparseable type id falls back to the placeholder type; missing
+     * radii fall back to the weather type defaults; the natural flag, the unseen ticks and the heading bias, which
+     * older saves lack, default to not natural, zero and zero. The loaded storm is not dirty.
      */
     public static StormInstance load(CompoundTag tag) {
         ResourceLocation typeId = ResourceLocation.tryParse(tag.getString(KEY_TYPE));
@@ -178,6 +232,13 @@ public final class StormInstance {
             storm.intensity = Mth.clamp(tag.getFloat(KEY_INTENSITY), 0.0F, 1.0F);
         }
         storm.steered = tag.getBoolean(KEY_STEERED);
+        storm.natural = tag.getBoolean(KEY_NATURAL);
+        if (tag.contains(KEY_TICKS_UNSEEN, Tag.TAG_ANY_NUMERIC)) {
+            storm.ticksUnseen = Math.max(0, tag.getInt(KEY_TICKS_UNSEEN));
+        }
+        if (tag.contains(KEY_HEADING_BIAS, Tag.TAG_ANY_NUMERIC)) {
+            storm.headingBiasDegrees = wrapBias(tag.getFloat(KEY_HEADING_BIAS));
+        }
         storm.dirty = false;
         return storm;
     }
@@ -210,6 +271,31 @@ public final class StormInstance {
     public void releaseSteering() {
         this.steered = false;
         this.dirty = true;
+    }
+
+    /** Marks the storm as spawned by the director. The flag is persisted and never cleared. */
+    public void markNatural() {
+        this.natural = true;
+    }
+
+    /**
+     * Records how long no player has been near the storm, as counted by the director. Negative values are clamped
+     * to zero. Not synced to clients.
+     */
+    public void setTicksUnseen(int ticks) {
+        this.ticksUnseen = Math.max(0, ticks);
+    }
+
+    /**
+     * Sets the turn the storm's heading gets away from the wind direction while it is not steered, wrapped to
+     * {@code [-180, 180)}. Takes effect on the next tick; a change marks the storm dirty.
+     */
+    public void setHeadingBias(float degrees) {
+        float wrapped = wrapBias(degrees);
+        if (wrapped != this.headingBiasDegrees) {
+            this.headingBiasDegrees = wrapped;
+            this.dirty = true;
+        }
     }
 
     /** Squared horizontal distance from the storm centre to a point. */
@@ -303,6 +389,21 @@ public final class StormInstance {
         return steered;
     }
 
+    /** Whether the director spawned this storm; such storms count toward the natural storm cap. */
+    public boolean isNatural() {
+        return natural;
+    }
+
+    /** Ticks the director has counted without a player near the storm; zero while someone is near. */
+    public int ticksUnseen() {
+        return ticksUnseen;
+    }
+
+    /** The turn away from the wind direction the storm's heading gets while not steered, in {@code [-180, 180)}. */
+    public float headingBiasDegrees() {
+        return headingBiasDegrees;
+    }
+
     /** Whether the storm changed since it was last sent to clients. */
     public boolean isDirty() {
         return dirty;
@@ -313,9 +414,19 @@ public final class StormInstance {
         this.dirty = false;
     }
 
+    /** Wraps a heading bias into {@code [-180, 180)}; a non-finite value becomes zero. */
+    private static float wrapBias(float degrees) {
+        if (!Float.isFinite(degrees)) {
+            return 0.0F;
+        }
+        float wrapped = Mth.wrapDegrees(degrees);
+        return wrapped >= 180.0F ? -180.0F : wrapped;
+    }
+
     @Override
     public String toString() {
         return "StormInstance[id=" + id + ", type=" + type.location() + ", x=" + x + ", z=" + z
-            + ", intensity=" + intensity + ", age=" + ageTicks + "/" + maxAgeTicks + "]";
+            + ", intensity=" + intensity + ", age=" + ageTicks + "/" + maxAgeTicks
+            + (natural ? ", natural" : "") + (steered ? ", steered" : "") + "]";
     }
 }

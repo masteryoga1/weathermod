@@ -5,6 +5,7 @@ import com.weathermod.config.ClientConfig;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import net.minecraft.SharedConstants;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -17,9 +18,9 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterGuiLayersEvent;
 
 /**
- * Top-left text overlay listing the wind and every storm the client knows. It is drawn as a GUI layer above all
- * vanilla layers whenever the client config enables it or it has been toggled on at runtime through the key
- * mapping or {@code /weathermodc overlay}.
+ * Top-left text overlay listing the wind, the climate at the player and every storm the client knows. It is drawn
+ * as a GUI layer above all vanilla layers whenever the client config enables it or it has been toggled on at
+ * runtime through the key mapping or {@code /weathermodc overlay}.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID, value = Dist.CLIENT)
 public final class WeatherDebugOverlay {
@@ -33,6 +34,10 @@ public final class WeatherDebugOverlay {
     public static final int MARGIN = 4;
     /** Opaque white, drawn with a drop shadow. */
     public static final int TEXT_COLOR = 0xFFFFFFFF;
+    /** Wind line shown until the first wind update has arrived. */
+    public static final String WIND_UNKNOWN = "Wind: waiting for server";
+    /** Climate line shown until the first climate update has arrived. */
+    public static final String CLIMATE_UNKNOWN = "Climate: waiting for server";
 
     private static volatile boolean toggled;
 
@@ -92,14 +97,15 @@ public final class WeatherDebugOverlay {
     }
 
     /**
-     * Builds the overlay text for a viewer at the given horizontal position: the header, the wind, the storm count
-     * and one line per storm with id, type, distance, intensity and age.
+     * Builds the overlay text for a viewer at the given horizontal position: the header, the wind, the climate, the
+     * storm count and one line per storm with id, type, distance, intensity, age and time since the last sync.
      */
     public static List<String> buildLines(ClientWeatherState state, double viewerX, double viewerZ,
                                           float partialTick) {
-        List<String> lines = new ArrayList<>(3 + state.stormCount());
+        List<String> lines = new ArrayList<>(4 + state.stormCount());
         lines.add(HEADER);
         lines.add(formatWind(state));
+        lines.add(formatClimate(state));
         lines.add("Storms: " + state.stormCount());
         for (ClientStorm storm : state.storms()) {
             lines.add(formatStorm(storm, viewerX, viewerZ, partialTick));
@@ -107,13 +113,37 @@ public final class WeatherDebugOverlay {
         return lines;
     }
 
-    /** One line describing the wind, or a placeholder until the first wind update has arrived. */
+    /**
+     * One line describing the wind, with the gust speed appended while a gust blows, or a placeholder until the
+     * first wind update has arrived.
+     */
     public static String formatWind(ClientWeatherState state) {
         if (!state.hasWind()) {
-            return "Wind: waiting for server";
+            return WIND_UNKNOWN;
         }
-        return String.format(Locale.ROOT, "Wind: %.0f deg at %.1f b/s", state.windDirectionDegrees(),
+        String line = String.format(Locale.ROOT, "Wind: %.0f deg at %.1f b/s", state.windDirectionDegrees(),
             state.windSpeed());
+        if (state.isWindGusting()) {
+            line += String.format(Locale.ROOT, ", gust %.1f b/s", state.windGustSpeed());
+        }
+        return line;
+    }
+
+    /**
+     * One line describing the climate at the player: temperature, humidity, what would fall and the season with its
+     * progress, or a placeholder until the first climate update has arrived.
+     */
+    public static String formatClimate(ClientWeatherState state) {
+        if (!state.hasClimate()) {
+            return CLIMATE_UNKNOWN;
+        }
+        String kind = state.precipitationKind().name().toLowerCase(Locale.ROOT);
+        String season = state.hasSeason()
+            ? String.format(Locale.ROOT, "season %s %d%%", state.seasonName(),
+                Math.round(state.seasonProgress() * 100.0F))
+            : "no season";
+        return String.format(Locale.ROOT, "Climate: T %.2f H %.2f %s, %s", state.temperature(), state.humidity(),
+            kind, season);
     }
 
     /** One line describing a storm as seen from the given horizontal position. */
@@ -122,7 +152,9 @@ public final class WeatherDebugOverlay {
         double dz = storm.getZ(partialTick) - viewerZ;
         double distance = Math.sqrt(dx * dx + dz * dz);
         int percent = Math.round(storm.getIntensity(partialTick) * 100.0F);
-        return String.format(Locale.ROOT, "#%d %s  %.0f m  %d%%  %d/%d s", storm.id(), storm.typeId().getPath(),
-            distance, percent, storm.ageSeconds(), storm.maxAgeSeconds());
+        int syncedSecondsAgo = storm.ticksSinceUpdate() / SharedConstants.TICKS_PER_SECOND;
+        return String.format(Locale.ROOT, "#%d %s  %.0f m  %d%%  %d/%d s  synced %ds ago", storm.id(),
+            storm.typeId().getPath(), distance, percent, storm.ageSeconds(), storm.maxAgeSeconds(),
+            syncedSecondsAgo);
     }
 }

@@ -1,5 +1,6 @@
 package com.weathermod.client;
 
+import com.weathermod.network.ClimateUpdatePayload;
 import com.weathermod.network.StormDeltaPayload;
 import com.weathermod.network.StormListPayload;
 import com.weathermod.network.StormRemovedPayload;
@@ -32,6 +33,11 @@ public final class ClientPayloadHandler {
 
     /** Stores the dimension's wind. */
     public static void handleWindUpdate(WindUpdatePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> ClientWeatherState.INSTANCE.apply(payload));
+    }
+
+    /** Stores the climate at the player. */
+    public static void handleClimateUpdate(ClimateUpdatePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> ClientWeatherState.INSTANCE.apply(payload));
     }
 }
