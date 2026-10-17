@@ -1,0 +1,25 @@
+{
+  "family": "obscurant",
+  "intensity": {
+    "min": 0.3,
+    "max": 1.0
+  },
+  "climate": {
+    "min_temperature": -0.5,
+    "max_temperature": 1.2,
+    "min_humidity": 0.3,
+    "max_humidity": 1.0
+  },
+  "duration_seconds": {
+    "min": 300.0,
+    "max": 900.0
+  },
+  "radius": 160.0,
+  "interest_radius": 640.0,
+  "weight": 8,
+  "visuals": {
+    "rain_level": 0.0,
+    "thunder_level": 0.0,
+    "haze_strength": 0.8
+  }
+}

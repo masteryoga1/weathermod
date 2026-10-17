@@ -1,0 +1,25 @@
+{
+  "family": "precipitation",
+  "intensity": {
+    "min": 0.4,
+    "max": 1.0
+  },
+  "climate": {
+    "min_temperature": 0.15,
+    "max_temperature": 1.0,
+    "min_humidity": 0.3,
+    "max_humidity": 1.0
+  },
+  "duration_seconds": {
+    "min": 300.0,
+    "max": 1200.0
+  },
+  "radius": 128.0,
+  "interest_radius": 640.0,
+  "weight": 10,
+  "visuals": {
+    "rain_level": 1.0,
+    "thunder_level": 0.0,
+    "haze_strength": 0.3
+  }
+}

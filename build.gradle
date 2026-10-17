@@ -71,6 +71,9 @@ neoForge {
             sourceSet(sourceSets.main)
         }
     }
+
+    // Plain JUnit tests compile against Minecraft and NeoForge classes without launching the game.
+    addModdingDependenciesTo(sourceSets.test)
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
