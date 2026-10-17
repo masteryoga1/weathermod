@@ -28,6 +28,8 @@ public final class StormInstance {
     public static final float RAMP_DOWN_FRACTION = 0.2F;
     /** Fastest speed a steered storm may be given, in blocks per second. */
     public static final float MAX_STEER_SPEED = 64.0F;
+    /** Shortest life {@link #endSoon()} leaves a storm, in ticks, so a very young storm still fades visibly. */
+    public static final int MIN_FADE_TICKS = 100;
 
     private static final String KEY_ID = "Id";
     private static final String KEY_TYPE = "Type";
@@ -167,18 +169,18 @@ public final class StormInstance {
     }
 
     /**
-     * Cuts the storm's life short: when more than one ramp-down length remains, the maximum age is pulled in to the
-     * current age plus the ramp-down length ({@link #RAMP_DOWN_FRACTION} of the old maximum age), so the storm has
-     * at most one ramp-down length left to live. The current intensity stays continuous: the peak intensity is
-     * recomputed so the life envelope at the new maximum age reproduces it. A storm with no more than one
-     * ramp-down length left is left alone, so repeated calls settle quickly.
+     * Cuts the storm's life short so that it enters its ramp-down now: the maximum age is pulled in to the age at
+     * which the current age sits exactly at the start of the ramp-down, {@code ageTicks / (1 - RAMP_DOWN_FRACTION)},
+     * but never closer than {@link #MIN_FADE_TICKS} ahead, so the intensity starts falling on the next tick. The
+     * current intensity stays continuous: the peak intensity is recomputed so the life envelope at the new maximum
+     * age reproduces it. A storm whose remaining life is already no longer than that is left alone, so repeated
+     * calls are idempotent and never lengthen a storm.
      */
     public void endSoon() {
-        int rampDown = rampDownTicks();
-        if (remainingTicks() <= rampDown) {
+        int newMaxAge = Math.max(ageTicks + MIN_FADE_TICKS, Math.round(ageTicks / (1.0F - RAMP_DOWN_FRACTION)));
+        if (remainingTicks() <= newMaxAge - ageTicks) {
             return;
         }
-        int newMaxAge = Math.max(ageTicks + 1, ageTicks + rampDown);
         float envelope = lifeEnvelope(ageTicks, newMaxAge);
         if (envelope > 0.0F) {
             peakIntensity = Mth.clamp(intensity / envelope, 0.0F, 1.0F);

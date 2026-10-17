@@ -247,17 +247,16 @@ class StormInstanceNbtTest {
     }
 
     @Test
-    void endSoonLeavesOneRampDownLengthAndKeepsTheIntensity() {
+    void endSoonStartsTheRampDownNowAndKeepsTheIntensity() {
         StormInstance storm = sampleStorm();
         storm.clearDirty();
-        int rampDown = Math.round(StormInstance.RAMP_DOWN_FRACTION * 2400);
-        assertEquals(480, rampDown);
-        assertEquals(rampDown, storm.rampDownTicks());
+        assertEquals(480, storm.rampDownTicks());
 
         storm.endSoon();
 
-        assertEquals(600 + rampDown, storm.maxAgeTicks(), "the storm has one ramp-down length left");
-        assertEquals(rampDown, storm.remainingTicks());
+        assertEquals(750, storm.maxAgeTicks(), "age 600 sits exactly at the start of the ramp-down of a 750 tick life");
+        assertEquals(150, storm.remainingTicks());
+        assertTrue(storm.remainingTicks() <= storm.rampDownTicks(), "no storm outlives its ramp-down");
         assertEquals(0.8F, storm.intensity(), EPSILON, "the intensity does not jump");
         assertEquals(0.8F, storm.peakIntensity(), EPSILON, "a storm on its plateau keeps its peak");
         assertTrue(storm.isDirty());
@@ -265,6 +264,7 @@ class StormInstanceNbtTest {
         storm.tick(new WindState(0.0F, 0.0F));
         assertEquals(0.8F * StormInstance.lifeEnvelope(601, storm.maxAgeTicks()), storm.intensity(), EPSILON,
             "the next tick continues the envelope from the new maximum age");
+        assertTrue(storm.intensity() < 0.8F, "and the intensity starts falling at once");
     }
 
     @Test
@@ -275,10 +275,11 @@ class StormInstanceNbtTest {
 
         storm.endSoon();
 
-        assertEquals(250, storm.maxAgeTicks());
+        assertEquals(50 + StormInstance.MIN_FADE_TICKS, storm.maxAgeTicks(),
+            "a very young storm is still given the minimum fade");
         assertEquals(0.5F, storm.intensity(), EPSILON);
         assertEquals(0.5F, storm.peakIntensity(), EPSILON,
-            "age 50 of 250 is on the plateau, so the peak must equal the current intensity");
+            "age 50 of 150 is on the plateau, so the peak must equal the current intensity");
 
         storm.tick(new WindState(0.0F, 0.0F));
         assertEquals(0.5F, storm.intensity(), EPSILON, "no jump on the following tick either");
@@ -312,7 +313,7 @@ class StormInstanceNbtTest {
 
         storm.endSoon();
 
-        assertEquals(200, storm.maxAgeTicks());
+        assertEquals(StormInstance.MIN_FADE_TICKS, storm.maxAgeTicks());
         assertEquals(0.9F, storm.peakIntensity(), EPSILON, "a zero envelope cannot rescale the peak, so it is kept");
         assertEquals(0.0F, storm.intensity(), EPSILON);
     }

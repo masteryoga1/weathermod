@@ -151,9 +151,10 @@ public final class WindState {
     }
 
     /**
-     * Sets direction and speed directly, as the wind command does. The new direction also becomes the prevailing
-     * direction and the new speed the drift target; the target timer restarts, so the value holds for a while
-     * before the random walk resumes. The regime and any running gust are kept.
+     * Sets direction and speed directly, as the wind command does. The value is the new starting point of the
+     * random walk, not a pin: the direction drifts again from the next tick, pulled toward the new direction, which
+     * also becomes the prevailing direction; the new speed becomes the drift target and the target timer restarts,
+     * so the speed re-rolls after {@link #TARGET_INTERVAL_TICKS}. The regime and any running gust are kept.
      */
     public void set(float directionDegrees, float speed) {
         this.directionDegrees = Headings.wrapDegrees(directionDegrees);

@@ -46,7 +46,9 @@ public final class ServerConfig {
 
         destructionMode = builder
                 .comment("How much storms may change the world.",
-                        "FULL rips blocks and moves entities, ENTITIES_ONLY leaves terrain alone, VISUAL_ONLY touches nothing.")
+                        "FULL rips blocks and moves entities, ENTITIES_ONLY moves entities but never rips or throws blocks,",
+                        "VISUAL_ONLY touches nothing. Snow and ice deposition follow snowAccumulation and iceFormation",
+                        "and are disabled only by VISUAL_ONLY.")
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "destructionMode")
                 .defineEnum("destructionMode", DestructionMode.FULL);
 

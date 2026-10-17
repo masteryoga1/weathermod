@@ -13,10 +13,10 @@ import com.weathermod.core.PrecipitationKind;
 import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherType;
 import com.weathermod.network.WeatherNetwork;
-import com.weathermod.network.WindUpdatePayload;
 import com.weathermod.server.DimensionWeatherData;
 import com.weathermod.server.StormInstance;
 import com.weathermod.server.WeatherManager;
+import com.weathermod.server.WeatherSimulator;
 import com.weathermod.server.WindRegime;
 import com.weathermod.server.WindState;
 import com.weathermod.server.climate.ClimateField;
@@ -284,7 +284,7 @@ public final class WeatherModCommands {
 
         wind.set(directionDegrees, speed);
         data.setDirty();
-        WeatherNetwork.sendToDimension(level, new WindUpdatePayload(wind.directionDegrees(), wind.speed(), wind.gustSpeed()));
+        WeatherNetwork.sendToDimension(level, WeatherSimulator.windPayload(wind));
 
         String dimension = dimensionName(level);
         String direction = formatDecimal(wind.directionDegrees());

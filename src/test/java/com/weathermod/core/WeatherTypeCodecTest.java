@@ -72,7 +72,7 @@ class WeatherTypeCodecTest {
         assertEquals(1.0F, type.intensity().max(), EPSILON);
         assertEquals(WeatherType.Climate.ANY, type.climate());
         assertEquals(-1.0F, type.climate().minTemperature(), EPSILON);
-        assertEquals(2.0F, type.climate().maxTemperature(), EPSILON);
+        assertEquals(2.5F, type.climate().maxTemperature(), EPSILON);
         assertEquals(0.0F, type.climate().minHumidity(), EPSILON);
         assertEquals(1.0F, type.climate().maxHumidity(), EPSILON);
         assertEquals(WeatherType.DEFAULT_DURATION_SECONDS, type.durationSeconds());
@@ -137,7 +137,7 @@ class WeatherTypeCodecTest {
         WeatherType type = parse("{\"family\": \"obscurant\", \"climate\": {\"min_temperature\": 1.5}}");
 
         assertEquals(1.5F, type.climate().minTemperature(), EPSILON);
-        assertEquals(2.0F, type.climate().maxTemperature(), EPSILON);
+        assertEquals(2.5F, type.climate().maxTemperature(), EPSILON);
         assertEquals(0.0F, type.climate().minHumidity(), EPSILON);
         assertEquals(1.0F, type.climate().maxHumidity(), EPSILON);
     }
@@ -409,6 +409,7 @@ class WeatherTypeCodecTest {
         assertSame(PrecipitationMode.NONE, heatHaze.precipitation());
         assertFalse(heatHaze.precipitates());
         assertEquals(1.2F, heatHaze.climate().minTemperature(), EPSILON);
+        assertEquals(2.5F, heatHaze.climate().maxTemperature(), EPSILON, "reaches the hottest Nether sample");
         assertEquals(6, heatHaze.weight());
         assertEquals(List.of(OVERWORLD, THE_NETHER), heatHaze.dimensions());
 

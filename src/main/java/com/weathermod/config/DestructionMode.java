@@ -10,9 +10,12 @@ import net.neoforged.neoforge.common.TranslatableEnum;
 public enum DestructionMode implements TranslatableEnum {
     /** Blocks are ripped, entities are pushed and lightning does damage. */
     FULL("full"),
-    /** Entities are pushed and damaged but the terrain is never changed. */
+    /**
+     * Entities are pushed and damaged but storms never rip or throw blocks. Snow and ice deposition under snow
+     * storms still occur unless their own toggles are off; only {@link #VISUAL_ONLY} disables them.
+     */
     ENTITIES_ONLY("entities_only"),
-    /** Storms are only drawn; nothing in the world is touched. */
+    /** Storms are only drawn; nothing in the world is touched, deposition included. */
     VISUAL_ONLY("visual_only");
 
     private static final String TRANSLATION_PREFIX = ConfigSetup.TRANSLATION_PREFIX + "destructionMode.";

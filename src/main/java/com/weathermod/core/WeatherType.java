@@ -221,12 +221,13 @@ public record WeatherType(
     }
 
     /**
-     * The biome climate window a type may form in. Temperature uses vanilla biome temperature
-     * (roughly -0.7 for frozen peaks to 2.0 for deserts), humidity uses vanilla downfall (0 to 1).
+     * The biome climate window a type may form in. Temperature uses the vanilla biome temperature scale (roughly
+     * -0.7 for frozen peaks to 2.0 for deserts) as shifted by the server's climate field, which reports values in
+     * {@code [-1, 2.5]}; humidity uses vanilla downfall (0 to 1).
      */
     public record Climate(float minTemperature, float maxTemperature, float minHumidity, float maxHumidity) {
-        /** The whole vanilla climate space; the default when a type gives no climate. */
-        public static final Climate ANY = new Climate(-1.0F, 2.0F, 0.0F, 1.0F);
+        /** The whole range the climate field can report; the default when a type gives no climate. */
+        public static final Climate ANY = new Climate(-1.0F, 2.5F, 0.0F, 1.0F);
 
         public static final Codec<Climate> CODEC = RecordCodecBuilder.<Climate>create(instance -> instance.group(
             Codec.FLOAT.optionalFieldOf("min_temperature", ANY.minTemperature()).forGetter(Climate::minTemperature),
