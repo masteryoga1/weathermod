@@ -57,6 +57,7 @@ class ConfigSpecTest {
         assertEquals(48, ServerConfig.maxFlyingBlocksPerStorm.getDefault());
         assertEquals(1.0D, ServerConfig.stormFrequency.getDefault());
         assertEquals(240, ServerConfig.naturalSpawnIntervalSeconds.getDefault());
+        assertEquals(0.3D, ServerConfig.stormDriftFactor.getDefault());
         assertEquals(8, ServerConfig.maxStormsPerDimension.getDefault());
         assertEquals(10, ServerConfig.syncIntervalTicks.getDefault());
         assertEquals(900, ServerConfig.severeWeatherCooldownSeconds.getDefault());
@@ -73,6 +74,7 @@ class ConfigSpecTest {
         assertEquals(ServerConfig.destructionMode.getDefault(), WeatherManager.DEFAULT_DESTRUCTION_MODE);
         assertEquals(ServerConfig.stormFrequency.getDefault(), WeatherManager.DEFAULT_STORM_FREQUENCY);
         assertEquals(ServerConfig.naturalSpawnIntervalSeconds.getDefault(), WeatherManager.DEFAULT_NATURAL_SPAWN_INTERVAL_SECONDS);
+        assertEquals(ServerConfig.stormDriftFactor.getDefault(), WeatherManager.DEFAULT_STORM_DRIFT_FACTOR);
         assertEquals(ServerConfig.maxStormsPerDimension.getDefault(), WeatherManager.DEFAULT_MAX_STORMS_PER_DIMENSION);
         assertEquals(ServerConfig.syncIntervalTicks.getDefault(), WeatherManager.DEFAULT_SYNC_INTERVAL_TICKS);
         assertEquals(ServerConfig.vanillaWeatherBridge.getDefault(), WeatherManager.DEFAULT_VANILLA_WEATHER_BRIDGE);

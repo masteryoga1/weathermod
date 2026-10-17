@@ -1,5 +1,6 @@
 package com.weathermod.server.director;
 
+import com.weathermod.core.Coverage;
 import com.weathermod.core.Headings;
 import net.minecraft.util.RandomSource;
 
@@ -17,6 +18,10 @@ public final class SpawnPlanner {
     public static final float MAX_DISTANCE_FRACTION = MIN_DISTANCE_FRACTION + DISTANCE_SPREAD_FRACTION;
     /** Largest sideways offset, perpendicular to the wind, as a fraction of the interest radius. */
     public static final float LATERAL_JITTER_FRACTION = 0.3F;
+    /** Longest time, in seconds, a natural storm should need to drift from its spawn point to its anchor. */
+    public static final float MAX_ARRIVAL_SECONDS = 240.0F;
+    /** Nearest spawn distance as a fraction of the storm's own radius: the edge of its full coverage. */
+    public static final float MIN_STORM_RADIUS_FRACTION = Coverage.FULL_FRACTION;
 
     private SpawnPlanner() {
     }
@@ -39,10 +44,27 @@ public final class SpawnPlanner {
      */
     public static Plan upwind(double anchorX, double anchorZ, float windDirectionDegrees, float interestRadius,
                               RandomSource random) {
+        return upwind(anchorX, anchorZ, windDirectionDegrees, interestRadius, 0.0F, Float.POSITIVE_INFINITY, random);
+    }
+
+    /**
+     * Plans a spawn upwind of an anchor like {@link #upwind(double, double, float, float, RandomSource)}, but caps
+     * the distance so a storm drifting at {@code driftSpeed} blocks per second reaches the anchor within
+     * {@link #MAX_ARRIVAL_SECONDS}, and never puts it closer than {@link #MIN_STORM_RADIUS_FRACTION} of the storm's
+     * own radius, so in calm air the storm forms at the edge of the player's full coverage and fades in there. The
+     * sideways offset shrinks in proportion to the distance, so a close spawn still ends up over the anchor. The
+     * random source is read twice, as the simpler overload does.
+     */
+    public static Plan upwind(double anchorX, double anchorZ, float windDirectionDegrees, float interestRadius,
+                              float stormRadius, float driftSpeed, RandomSource random) {
         float heading = Headings.wrapDegrees(windDirectionDegrees);
         float radius = Math.max(0.0F, interestRadius);
-        double distance = radius * (MIN_DISTANCE_FRACTION + DISTANCE_SPREAD_FRACTION * random.nextFloat());
-        double lateral = radius * LATERAL_JITTER_FRACTION * (random.nextFloat() * 2.0F - 1.0F);
+        double band = radius * (MIN_DISTANCE_FRACTION + DISTANCE_SPREAD_FRACTION * random.nextFloat());
+        double floor = Math.max(0.0F, stormRadius) * MIN_STORM_RADIUS_FRACTION;
+        double reach = floor + Math.max(0.0F, driftSpeed) * MAX_ARRIVAL_SECONDS;
+        double distance = Math.max(floor, Math.min(band, reach));
+        double scale = band > 0.0D ? distance / band : 1.0D;
+        double lateral = radius * LATERAL_JITTER_FRACTION * (random.nextFloat() * 2.0F - 1.0F) * scale;
 
         float from = Headings.wrapDegrees(heading + 180.0F);
         float side = Headings.wrapDegrees(heading + 90.0F);

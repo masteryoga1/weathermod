@@ -124,13 +124,14 @@ public final class StormInstance {
 
     /**
      * Advances the storm by one tick: unless steered, takes the wind direction turned by the heading bias as its
-     * heading and the wind speed as its speed; then moves along its heading, ages, and recomputes the intensity
-     * from the life envelope. Always marks the storm dirty.
+     * heading and the wind speed times {@code driftFactor} (clamped to 0..1) as its speed; then moves along its
+     * heading, ages, and recomputes the intensity from the life envelope. Always marks the storm dirty. Storms
+     * travel slower than the air so a storm of a hundred blocks lingers over a player for minutes, not seconds.
      */
-    public void tick(WindState wind) {
+    public void tick(WindState wind, float driftFactor) {
         if (!steered) {
             headingDegrees = Headings.wrapDegrees(wind.directionDegrees() + headingBiasDegrees);
-            speed = wind.speed();
+            speed = wind.speed() * Mth.clamp(driftFactor, 0.0F, 1.0F);
         }
         double blocksThisTick = speed / SharedConstants.TICKS_PER_SECOND;
         x += Headings.directionX(headingDegrees) * blocksThisTick;
@@ -138,6 +139,19 @@ public final class StormInstance {
         ageTicks++;
         intensity = peakIntensity * lifeEnvelope(ageTicks, maxAgeTicks);
         dirty = true;
+    }
+
+    /**
+     * Skips the ramp-up so the storm is at its peak intensity at once, for storms an operator spawns and wants to
+     * see immediately; natural storms keep the ramp. A storm already past its ramp-up is left alone.
+     */
+    public void startAtPeak() {
+        int plateauStart = (int) Math.ceil(RAMP_UP_FRACTION * maxAgeTicks);
+        if (ageTicks < plateauStart) {
+            ageTicks = plateauStart;
+            intensity = peakIntensity * lifeEnvelope(ageTicks, maxAgeTicks);
+            dirty = true;
+        }
     }
 
     /** Whether the storm has lived out its maximum age and should be removed. */

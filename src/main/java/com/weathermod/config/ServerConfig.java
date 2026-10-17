@@ -19,6 +19,8 @@ public final class ServerConfig {
     public static final ModConfigSpec.DoubleValue stormFrequency;
     /** Seconds between the director's natural spawn attempts at a storm frequency of one. */
     public static final ModConfigSpec.IntValue naturalSpawnIntervalSeconds;
+    /** Fraction of the wind speed at which storms travel. */
+    public static final ModConfigSpec.DoubleValue stormDriftFactor;
     /** Hard cap on simultaneous storms in one dimension. */
     public static final ModConfigSpec.IntValue maxStormsPerDimension;
     /** Ticks between storm delta packets sent to interested players. */
@@ -74,6 +76,12 @@ public final class ServerConfig {
                         "Each wait is divided by stormFrequency and varied by up to half either way.")
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "naturalSpawnIntervalSeconds")
                 .defineInRange("naturalSpawnIntervalSeconds", 240, 10, 86400);
+
+        stormDriftFactor = builder
+                .comment("Fraction of the wind speed at which storms travel across the world.",
+                        "1.0 carries a 128-block rain storm past a player in under a minute; 0.3 gives a few minutes of rain.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "stormDriftFactor")
+                .defineInRange("stormDriftFactor", 0.3D, 0.05D, 1.0D);
 
         maxStormsPerDimension = builder
                 .comment("Maximum number of storms that may exist at the same time in one dimension.",

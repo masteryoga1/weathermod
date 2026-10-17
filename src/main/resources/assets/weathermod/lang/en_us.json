@@ -118,6 +118,8 @@
   "weathermod.configuration.snowAccumulation.tooltip": "Let snow storms lay snow layers on the ground under them, up to the snowAccumulationHeight game rule. Ignored while the destruction mode is Visual Only.",
   "weathermod.configuration.soundVolume": "Weather Sound Volume",
   "weathermod.configuration.soundVolume.tooltip": "Volume of wind, rain and storm sounds played by the mod, on top of the game's weather volume.",
+  "weathermod.configuration.stormDriftFactor": "Storm Drift Factor",
+  "weathermod.configuration.stormDriftFactor.tooltip": "Fraction of the wind speed at which storms travel. 1.0 carries a 128-block rain storm past a player in under a minute; 0.3 gives a few minutes of rain.",
   "weathermod.configuration.stormFrequency": "Storm Frequency",
   "weathermod.configuration.stormFrequency.tooltip": "Multiplier on how often storms form naturally. 1.0 is the designed rate, 0.0 disables natural storms.",
   "weathermod.configuration.syncIntervalTicks": "Sync Interval (Ticks)",

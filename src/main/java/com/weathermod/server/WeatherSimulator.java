@@ -96,8 +96,9 @@ public final class WeatherSimulator {
         Function<StormInstance, WeatherType> types = typeLookup(level);
         if (!data.storms().isEmpty()) {
             FamilyContext context = new FamilyContext(level, data, data.climate(level), wind, tick, level.getRandom());
+            float driftFactor = WeatherManager.stormDriftFactor();
             for (StormInstance storm : data.storms()) {
-                storm.tick(wind);
+                storm.tick(wind, driftFactor);
                 WeatherType type = types.apply(storm);
                 if (type != null) {
                     FamilySystems.forFamily(type.family()).ifPresent(system -> system.tick(storm, type, context));

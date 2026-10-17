@@ -23,6 +23,45 @@ class SpawnPlannerTest {
     }
 
     @Test
+    void calmAirPullsTheSpawnInToTheEdgeOfFullCoverage() {
+        RandomSource random = RandomSource.create(7L);
+        for (int i = 0; i < 100; i++) {
+            SpawnPlanner.Plan plan = SpawnPlanner.upwind(0.0D, 0.0D, 90.0F, RADIUS, 128.0F, 0.0F, random);
+
+            double west = -plan.x();
+            assertEquals(0.6D * 128.0D, west, 1.0E-3D, "no drift: the storm forms at 60 percent of its own radius");
+            assertTrue(Math.abs(plan.z()) <= 0.3D * RADIUS * (west / (0.55D * RADIUS)) + 1.0E-3D,
+                "the sideways offset shrinks with the distance: " + plan.z());
+        }
+    }
+
+    @Test
+    void slowDriftCapsTheDistanceByTheArrivalTime() {
+        RandomSource random = RandomSource.create(11L);
+        float drift = 0.6F;
+        double reach = 0.6D * 128.0D + drift * SpawnPlanner.MAX_ARRIVAL_SECONDS;
+        for (int i = 0; i < 100; i++) {
+            SpawnPlanner.Plan plan = SpawnPlanner.upwind(0.0D, 0.0D, 90.0F, RADIUS, 128.0F, drift, random);
+            double west = -plan.x();
+            assertTrue(west <= reach + 1.0E-3D, "the storm must arrive within the arrival time: " + west);
+            assertTrue(west >= 0.6D * 128.0D - 1.0E-3D, "but never inside the edge of full coverage: " + west);
+        }
+    }
+
+    @Test
+    void fastDriftKeepsTheDesignedBand() {
+        RandomSource band = RandomSource.create(3L);
+        RandomSource capped = RandomSource.create(3L);
+        for (int i = 0; i < 100; i++) {
+            SpawnPlanner.Plan expected = SpawnPlanner.upwind(50.0D, 60.0D, 200.0F, RADIUS, band);
+            SpawnPlanner.Plan plan = SpawnPlanner.upwind(50.0D, 60.0D, 200.0F, RADIUS, 128.0F, 4.0F, capped);
+            assertEquals(expected.x(), plan.x(), 1.0E-6D, "4 blocks per second reaches the whole band in time");
+            assertEquals(expected.z(), plan.z(), 1.0E-6D);
+            assertEquals(expected.headingDegrees(), plan.headingDegrees(), EPSILON);
+        }
+    }
+
+    @Test
     void eastWindPlacesTheStormWestOfTheAnchor() {
         RandomSource random = RandomSource.create(42L);
         for (int i = 0; i < 200; i++) {

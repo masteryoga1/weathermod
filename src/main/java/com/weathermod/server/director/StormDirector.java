@@ -211,11 +211,12 @@ public final class StormDirector {
             return Optional.empty();
         }
         float windDirection = wind.directionDegrees();
+        float driftSpeed = wind.speed() * WeatherManager.stormDriftFactor();
 
         Holder<WeatherType> type = forcedType;
         if (type == null) {
             SpawnPlanner.Plan provisional = SpawnPlanner.upwind(anchor.getX(), anchor.getZ(), windDirection,
-                PLANNING_INTEREST_RADIUS, random);
+                PLANNING_INTEREST_RADIUS, 0.0F, driftSpeed, random);
             Optional<Holder<WeatherType>> picked = pickType(level, data, provisional, random);
             if (picked.isEmpty()) {
                 return Optional.empty();
@@ -224,7 +225,7 @@ public final class StormDirector {
         }
 
         SpawnPlanner.Plan plan = SpawnPlanner.upwind(anchor.getX(), anchor.getZ(), windDirection,
-            type.value().interestRadius(), random);
+            type.value().interestRadius(), type.value().radius(), driftSpeed, random);
         StormInstance storm = WeatherManager.spawnNatural(level, type, plan.x(), plan.z());
         if (storm == null) {
             return Optional.empty();

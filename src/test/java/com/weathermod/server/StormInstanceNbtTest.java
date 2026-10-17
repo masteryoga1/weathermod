@@ -159,7 +159,7 @@ class StormInstanceNbtTest {
         WindState wind = new WindState(90.0F, 10.0F);
 
         storm.clearDirty();
-        storm.tick(wind);
+        storm.tick(wind, 1.0F);
 
         assertTrue(storm.isDirty());
         assertEquals(90.0F, storm.headingDegrees(), EPSILON);
@@ -171,10 +171,51 @@ class StormInstanceNbtTest {
 
         for (int i = 1; i < 100; i++) {
             assertFalse(storm.isExpired());
-            storm.tick(wind);
+            storm.tick(wind, 1.0F);
         }
         assertTrue(storm.isExpired());
         assertEquals(0.0F, storm.intensity(), EPSILON);
+    }
+
+    @Test
+    void tickScalesTheWindSpeedByTheDriftFactor() {
+        StormInstance storm = new StormInstance(7, WeatherRegistries.key("placeholder"), 0.0D, 160.0D, 0.0D,
+            0.0F, 0.0F, 1.0F, 0, 1000, 64.0F, 512.0F);
+        WindState wind = new WindState(90.0F, 10.0F);
+
+        storm.tick(wind, 0.3F);
+        assertEquals(3.0F, storm.speed(), EPSILON, "a storm drifts at the factor times the wind speed");
+        assertEquals(0.15D, storm.x(), 1.0E-6D, "3 blocks per second is 0.15 blocks per tick");
+
+        storm.tick(wind, 5.0F);
+        assertEquals(10.0F, storm.speed(), EPSILON, "the factor is clamped to one");
+        storm.tick(wind, -1.0F);
+        assertEquals(0.0F, storm.speed(), EPSILON, "a negative factor is clamped to zero");
+
+        storm.steer(0.0F, 4.0F);
+        storm.tick(wind, 0.3F);
+        assertEquals(4.0F, storm.speed(), EPSILON, "a steered storm ignores the wind and the factor");
+    }
+
+    @Test
+    void startAtPeakSkipsTheRampUpOnlyWhileRampingUp() {
+        StormInstance storm = new StormInstance(8, WeatherRegistries.key("placeholder"), 0.0D, 160.0D, 0.0D,
+            0.0F, 0.0F, 0.8F, 0, 1000, 64.0F, 512.0F);
+        storm.clearDirty();
+
+        storm.startAtPeak();
+        assertEquals(100, storm.ageTicks(), "the storm jumps to the start of its plateau");
+        assertEquals(0.8F, storm.intensity(), EPSILON, "and sits at its peak intensity");
+        assertTrue(storm.isDirty());
+
+        storm.tick(new WindState(0.0F, 0.0F), 1.0F);
+        storm.startAtPeak();
+        assertEquals(101, storm.ageTicks(), "a storm past its ramp-up is left alone");
+
+        StormInstance late = new StormInstance(9, WeatherRegistries.key("placeholder"), 0.0D, 160.0D, 0.0D,
+            0.0F, 0.0F, 1.0F, 900, 1000, 64.0F, 512.0F);
+        late.startAtPeak();
+        assertEquals(900, late.ageTicks(), "a storm already ramping down is left alone");
     }
 
     @Test
@@ -183,16 +224,16 @@ class StormInstanceNbtTest {
             0.0F, 0.0F, 1.0F, 0, 1000, 64.0F, 512.0F);
         storm.setHeadingBias(20.0F);
 
-        storm.tick(new WindState(90.0F, 10.0F));
+        storm.tick(new WindState(90.0F, 10.0F), 1.0F);
         assertEquals(110.0F, storm.headingDegrees(), EPSILON, "the bias is added to the wind direction");
-        assertEquals(10.0F, storm.speed(), EPSILON, "the speed is the wind's, bias or not");
+        assertEquals(10.0F, storm.speed(), EPSILON, "the speed is the wind's times the drift factor, bias or not");
 
         storm.setHeadingBias(-100.0F);
-        storm.tick(new WindState(10.0F, 10.0F));
+        storm.tick(new WindState(10.0F, 10.0F), 1.0F);
         assertEquals(270.0F, storm.headingDegrees(), EPSILON, "the biased heading wraps into [0, 360)");
 
         storm.setHeadingBias(0.0F);
-        storm.tick(new WindState(10.0F, 10.0F));
+        storm.tick(new WindState(10.0F, 10.0F), 1.0F);
         assertEquals(10.0F, storm.headingDegrees(), EPSILON, "a zero bias follows the wind exactly");
     }
 
@@ -261,7 +302,7 @@ class StormInstanceNbtTest {
         assertEquals(0.8F, storm.peakIntensity(), EPSILON, "a storm on its plateau keeps its peak");
         assertTrue(storm.isDirty());
 
-        storm.tick(new WindState(0.0F, 0.0F));
+        storm.tick(new WindState(0.0F, 0.0F), 1.0F);
         assertEquals(0.8F * StormInstance.lifeEnvelope(601, storm.maxAgeTicks()), storm.intensity(), EPSILON,
             "the next tick continues the envelope from the new maximum age");
         assertTrue(storm.intensity() < 0.8F, "and the intensity starts falling at once");
@@ -281,7 +322,7 @@ class StormInstanceNbtTest {
         assertEquals(0.5F, storm.peakIntensity(), EPSILON,
             "age 50 of 150 is on the plateau, so the peak must equal the current intensity");
 
-        storm.tick(new WindState(0.0F, 0.0F));
+        storm.tick(new WindState(0.0F, 0.0F), 1.0F);
         assertEquals(0.5F, storm.intensity(), EPSILON, "no jump on the following tick either");
     }
 
@@ -324,7 +365,7 @@ class StormInstanceNbtTest {
             0.0F, 0.0F, 1.0F, 0, 1000, 64.0F, 512.0F);
         storm.setHeadingBias(45.0F);
         storm.steer(180.0F, 20.0F);
-        storm.tick(new WindState(90.0F, 5.0F));
+        storm.tick(new WindState(90.0F, 5.0F), 1.0F);
 
         assertEquals(180.0F, storm.headingDegrees(), EPSILON, "steering ignores wind and bias alike");
         assertEquals(20.0F, storm.speed(), EPSILON);
@@ -332,7 +373,7 @@ class StormInstanceNbtTest {
         assertEquals(1.0D, storm.z(), 1.0E-9D, "heading 180 is south, toward +Z");
 
         storm.releaseSteering();
-        storm.tick(new WindState(90.0F, 5.0F));
+        storm.tick(new WindState(90.0F, 5.0F), 1.0F);
         assertEquals(135.0F, storm.headingDegrees(), EPSILON, "released, the bias applies again");
         assertEquals(5.0F, storm.speed(), EPSILON);
     }
@@ -370,7 +411,7 @@ class StormInstanceNbtTest {
         assertEquals(0.8F, storm.peakIntensity(), EPSILON);
         assertEquals(0.0F, storm.intensity(), EPSILON, "a newborn storm starts at zero however high its peak");
 
-        storm.tick(new WindState(0.0F, 0.0F));
+        storm.tick(new WindState(0.0F, 0.0F), 1.0F);
         assertEquals(0.8F * StormInstance.lifeEnvelope(1, 2400), storm.intensity(), EPSILON,
             "the first tick continues the same envelope instead of jumping");
     }

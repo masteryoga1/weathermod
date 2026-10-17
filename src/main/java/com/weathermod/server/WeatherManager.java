@@ -29,6 +29,8 @@ public final class WeatherManager {
     public static final double DEFAULT_STORM_FREQUENCY = 1.0D;
     /** Seconds between natural spawn attempts at frequency one, used before the server config has loaded. */
     public static final int DEFAULT_NATURAL_SPAWN_INTERVAL_SECONDS = 240;
+    /** Fraction of the wind speed at which storms travel before the config loads. */
+    public static final double DEFAULT_STORM_DRIFT_FACTOR = 0.3D;
     /** Whether the vanilla rain bridge is on before the server config has loaded. */
     public static final boolean DEFAULT_VANILLA_WEATHER_BRIDGE = true;
     /** Whether snow storms lay snow before the server config has loaded. */
@@ -84,6 +86,11 @@ public final class WeatherManager {
         return ServerConfig.SPEC.isLoaded()
             ? ServerConfig.naturalSpawnIntervalSeconds.get()
             : DEFAULT_NATURAL_SPAWN_INTERVAL_SECONDS;
+    }
+
+    /** Fraction of the wind speed at which storms travel, from the config or the default before it loads. */
+    public static float stormDriftFactor() {
+        return (float) (ServerConfig.SPEC.isLoaded() ? ServerConfig.stormDriftFactor.get() : DEFAULT_STORM_DRIFT_FACTOR);
     }
 
     /** Whether vanilla rain and thunder follow the storms, from the config or the default before it loads. */
@@ -150,6 +157,7 @@ public final class WeatherManager {
             if (peakIntensity != null) {
                 storm.setPeakIntensity(peakIntensity);
             }
+            storm.startAtPeak();
             sync(level, storm);
         }
         return storm;
