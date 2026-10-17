@@ -47,16 +47,18 @@ public final class WeatherNetwork {
         sendStormToNearby(level, storm.toSnapshot());
     }
 
-    /** Sends a snapshot as a {@link StormDeltaPayload} to every player within its interest radius of its centre. */
+    /**
+     * Sends a snapshot as a {@link StormDeltaPayload} to every player within its interest radius of its centre. The
+     * test is horizontal, the same one {@code DimensionWeatherData.snapshotsNear} applies to the full list, so the
+     * players who receive deltas are exactly the players who received the storm on login.
+     */
     public static void sendStormToNearby(ServerLevel level, StormSnapshot snapshot) {
-        sendToNearby(level, snapshot.x(), snapshot.y(), snapshot.z(), snapshot.interestRadius(),
-            new StormDeltaPayload(snapshot));
-    }
-
-    /** Sends a payload to every player in the level within {@code radius} blocks of a point. */
-    public static void sendToNearby(ServerLevel level, double x, double y, double z, double radius,
-                                    CustomPacketPayload payload) {
-        PacketDistributor.sendToPlayersNear(level, null, x, y, z, radius, payload);
+        StormDeltaPayload payload = new StormDeltaPayload(snapshot);
+        for (ServerPlayer player : level.players()) {
+            if (snapshot.isWithinInterest(player.getX(), player.getZ())) {
+                sendToPlayer(player, payload);
+            }
+        }
     }
 
     /** Sends a payload to every player currently in the level. */

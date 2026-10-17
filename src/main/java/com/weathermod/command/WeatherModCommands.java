@@ -20,6 +20,7 @@ import com.weathermod.server.WindState;
 import java.util.List;
 import java.util.Locale;
 import net.minecraft.ChatFormatting;
+import net.minecraft.SharedConstants;
 import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -129,17 +130,10 @@ public final class WeatherModCommands {
         requireEnabled(level);
         Holder.Reference<WeatherType> type = ResourceArgument.getResource(ctx, ARG_TYPE, WeatherRegistries.WEATHER_TYPE);
 
-        DimensionWeatherData data = WeatherManager.get(level);
-        StormInstance storm = data.spawn(type, pos.x(), pos.z(), level.getRandom());
+        StormInstance storm = WeatherManager.spawn(level, type, pos.x(), pos.z(), intensity);
         if (storm == null) {
             throw ERROR_DIMENSION_FULL.create(WeatherManager.maxStormsPerDimension());
         }
-        if (intensity != null) {
-            storm.setIntensity(intensity);
-        }
-        WeatherNetwork.sendStormToNearby(level, storm);
-        storm.clearDirty();
-        data.setDirty();
 
         int id = storm.id();
         String typeId = type.key().location().toString();
@@ -199,8 +193,8 @@ public final class WeatherModCommands {
         DimensionWeatherData data = WeatherManager.get(level);
         StormInstance storm = findStorm(data, id);
 
-        storm.setIntensity(intensity);
-        sync(level, data, storm);
+        storm.setPeakIntensity(intensity);
+        WeatherManager.sync(level, storm);
 
         int percent = percent(storm.peakIntensity());
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.intensified", highlight(id), percent), true);
@@ -220,7 +214,7 @@ public final class WeatherModCommands {
         StormInstance storm = findStorm(data, id);
 
         storm.steer(headingDegrees, speed);
-        sync(level, data, storm);
+        WeatherManager.sync(level, storm);
 
         String heading = formatDecimal(storm.headingDegrees());
         String blocksPerSecond = formatDecimal(storm.speed());
@@ -238,7 +232,7 @@ public final class WeatherModCommands {
         StormInstance storm = findStorm(data, id);
 
         storm.releaseSteering();
-        sync(level, data, storm);
+        WeatherManager.sync(level, storm);
 
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.released", highlight(id)), true);
         return Command.SINGLE_SUCCESS;
@@ -309,13 +303,6 @@ public final class WeatherModCommands {
         return data.find(id).orElseThrow(() -> ERROR_STORM_NOT_FOUND.create(id));
     }
 
-    /** Sends a changed storm to interested players right away and persists the change. */
-    private static void sync(ServerLevel level, DimensionWeatherData data, StormInstance storm) {
-        WeatherNetwork.sendStormToNearby(level, storm);
-        storm.clearDirty();
-        data.setDirty();
-    }
-
     /** One chat line for {@code storm list}: id, type, position, heading and speed, intensity, age and steering. */
     private static MutableComponent describe(StormInstance storm) {
         Component steered = storm.isSteered()
@@ -364,6 +351,6 @@ public final class WeatherModCommands {
 
     /** Converts game ticks to whole real seconds. */
     private static int seconds(int ticks) {
-        return ticks / StormInstance.TICKS_PER_SECOND;
+        return ticks / SharedConstants.TICKS_PER_SECOND;
     }
 }

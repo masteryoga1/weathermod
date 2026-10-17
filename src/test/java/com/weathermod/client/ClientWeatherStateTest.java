@@ -132,14 +132,43 @@ class ClientWeatherStateTest {
     }
 
     @Test
-    void nearestPicksTheClosestCentre() {
+    void listPayloadForgetsTheWindUntilTheNextUpdate() {
         ClientWeatherState state = new ClientWeatherState();
-        assertTrue(state.nearest(0.0D, 0.0D).isEmpty());
-        state.apply(new StormDeltaPayload(snapshot(1, 100.0D, 0.0D, 0.0F, 0.0F, 0.5F, 0, 2400)));
-        state.apply(new StormDeltaPayload(snapshot(2, -30.0D, 40.0D, 0.0F, 0.0F, 0.5F, 0, 2400)));
+        state.apply(new WindUpdatePayload(90.0F, 2.0F));
+        state.apply(new StormDeltaPayload(snapshot(1, 0.0D, 0.0D, 0.0F, 0.0F, 0.5F, 0, 2400)));
 
-        assertEquals(2, state.nearest(0.0D, 0.0D).orElseThrow().id());
-        assertEquals(1, state.nearest(80.0D, 0.0D).orElseThrow().id());
+        state.apply(new StormListPayload(List.of()));
+
+        assertTrue(state.isEmpty());
+        assertFalse(state.hasWind(), "a dimension without weather sends only the list, so the old wind must go");
+        assertEquals(0.0F, state.windSpeed(), EPSILON);
+
+        state.apply(new WindUpdatePayload(180.0F, 1.0F));
+        assertTrue(state.hasWind());
+        assertEquals(180.0F, state.windDirectionDegrees(), EPSILON);
+    }
+
+    @Test
+    void stormsWithoutUpdatesAreDroppedAfterTheStaleLimit() {
+        ClientWeatherState state = new ClientWeatherState();
+        state.apply(new StormDeltaPayload(snapshot(1, 0.0D, 0.0D, 0.0F, 0.0F, 0.5F, 0, 24000)));
+        state.apply(new StormDeltaPayload(snapshot(2, 50.0D, 0.0D, 0.0F, 0.0F, 0.5F, 0, 24000)));
+
+        for (int i = 0; i < ClientWeatherState.STALE_TICKS; i++) {
+            state.tick();
+        }
+        assertEquals(2, state.stormCount(), "storms are kept right up to the stale limit");
+        assertEquals(ClientWeatherState.STALE_TICKS, state.storm(1).orElseThrow().ticksSinceUpdate());
+
+        state.apply(new StormDeltaPayload(snapshot(2, 50.0D, 0.0D, 0.0F, 0.0F, 0.5F, 400, 24000)));
+        state.tick();
+
+        assertTrue(state.storm(1).isEmpty(), "a storm the server stopped sending is dropped");
+        assertTrue(state.storm(2).isPresent(), "a storm that is still being sent stays");
+        assertEquals(1, state.stormCount());
+
+        state.apply(new StormDeltaPayload(snapshot(1, 0.0D, 0.0D, 0.0F, 0.0F, 0.5F, 401, 24000)));
+        assertEquals(2, state.stormCount(), "a later delta brings the storm back");
     }
 
     @Test

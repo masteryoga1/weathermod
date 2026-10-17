@@ -2,7 +2,6 @@ package com.weathermod.core;
 
 import com.mojang.serialization.Codec;
 import io.netty.buffer.ByteBuf;
-import java.util.Optional;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.util.StringRepresentable;
@@ -53,15 +52,5 @@ public enum WeatherFamily implements StringRepresentable {
             throw new IllegalArgumentException("Unknown weather family ordinal " + ordinal);
         }
         return VALUES[ordinal];
-    }
-
-    /** Looks a family up by its serialized name. */
-    public static Optional<WeatherFamily> byName(String name) {
-        for (WeatherFamily family : VALUES) {
-            if (family.serializedName.equals(name)) {
-                return Optional.of(family);
-            }
-        }
-        return Optional.empty();
     }
 }

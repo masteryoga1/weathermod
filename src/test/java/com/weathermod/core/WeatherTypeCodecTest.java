@@ -190,7 +190,6 @@ class WeatherTypeCodecTest {
             JsonElement encoded = WeatherFamily.CODEC.encodeStart(JsonOps.INSTANCE, family).getOrThrow();
             assertEquals(family.getSerializedName(), encoded.getAsString());
             assertSame(family, WeatherFamily.CODEC.parse(JsonOps.INSTANCE, encoded).getOrThrow());
-            assertEquals(Optional.of(family), WeatherFamily.byName(family.getSerializedName()));
 
             ByteBuf buffer = Unpooled.buffer();
             try {
@@ -200,7 +199,6 @@ class WeatherTypeCodecTest {
                 buffer.release();
             }
         }
-        assertEquals(Optional.empty(), WeatherFamily.byName("blizzard"));
     }
 
     @Test
@@ -245,14 +243,10 @@ class WeatherTypeCodecTest {
     }
 
     @Test
-    void builderMatchesParsedJson() {
-        WeatherType built = WeatherType.builder(WeatherFamily.OBSCURANT)
-            .weight(0)
-            .radius(64.0F)
-            .interestRadius(512.0F)
-            .durationSeconds(120.0F, 120.0F)
-            .visuals(0.0F, 0.0F, 0.3F)
-            .build();
+    void directConstructionMatchesParsedJson() {
+        WeatherType built = new WeatherType(WeatherFamily.OBSCURANT, WeatherType.DEFAULT_INTENSITY,
+            WeatherType.Climate.ANY, WeatherType.Range.of(120.0F), 64.0F, 512.0F, 0,
+            new WeatherType.Visuals(0.0F, 0.0F, 0.3F), Optional.empty(), WeatherType.DEFAULT_DIMENSIONS, true);
         WeatherType parsed = parse("""
             {
               "family": "obscurant",

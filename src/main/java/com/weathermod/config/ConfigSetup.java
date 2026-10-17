@@ -8,6 +8,9 @@ import net.neoforged.fml.config.ModConfig;
  * client-side configuration screen is registered separately by the client module.
  */
 public final class ConfigSetup {
+    /** Prefix of every config translation key, shared by the three specs and {@link DestructionMode}. */
+    public static final String TRANSLATION_PREFIX = "weathermod.configuration.";
+
     private ConfigSetup() {
     }
 

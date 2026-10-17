@@ -156,15 +156,6 @@ public final class DimensionWeatherData extends SavedData {
         return stormsView;
     }
 
-    /** Snapshots of every storm, for a full list payload. */
-    public List<StormSnapshot> snapshots() {
-        List<StormSnapshot> result = new ArrayList<>(storms.size());
-        for (StormInstance storm : storms) {
-            result.add(storm.toSnapshot());
-        }
-        return result;
-    }
-
     /** Snapshots of the storms whose interest radius covers the given horizontal position. */
     public List<StormSnapshot> snapshotsNear(double x, double z) {
         List<StormSnapshot> result = new ArrayList<>();

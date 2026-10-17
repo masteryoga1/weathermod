@@ -15,7 +15,7 @@ public enum DestructionMode implements TranslatableEnum {
     /** Storms are only drawn; nothing in the world is touched. */
     VISUAL_ONLY("visual_only");
 
-    private static final String TRANSLATION_PREFIX = "weathermod.configuration.destructionMode.";
+    private static final String TRANSLATION_PREFIX = ConfigSetup.TRANSLATION_PREFIX + "destructionMode.";
 
     private final String serializedName;
 

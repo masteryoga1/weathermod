@@ -1,6 +1,8 @@
 package com.weathermod.server;
 
+import com.weathermod.core.Headings;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 
 /**
@@ -38,7 +40,7 @@ public final class WindState {
      * speed clamped into {@code [MIN_SPEED, MAX_SPEED]}.
      */
     public WindState(float directionDegrees, float speed) {
-        this.directionDegrees = wrapDegrees(directionDegrees);
+        this.directionDegrees = Headings.wrapDegrees(directionDegrees);
         this.speed = clampSpeed(speed);
         this.targetSpeed = this.speed;
         this.ticksUntilNewTarget = TARGET_INTERVAL_TICKS;
@@ -53,7 +55,7 @@ public final class WindState {
 
     /**
      * Compass direction the wind blows toward, in degrees: 0 is north ({@code -Z}), 90 is east ({@code +X}),
-     * 180 is south ({@code +Z}) and 270 is west ({@code -X}). Always in {@code [0, 360)}.
+     * 180 is south ({@code +Z}) and 270 is west ({@code -X}), see {@link Headings}. Always in {@code [0, 360)}.
      */
     public float directionDegrees() {
         return directionDegrees;
@@ -71,12 +73,12 @@ public final class WindState {
 
     /** Horizontal velocity along {@code X} in blocks per second. */
     public double velocityX() {
-        return directionX(directionDegrees) * speed;
+        return Headings.directionX(directionDegrees) * speed;
     }
 
     /** Horizontal velocity along {@code Z} in blocks per second. */
     public double velocityZ() {
-        return directionZ(directionDegrees) * speed;
+        return Headings.directionZ(directionDegrees) * speed;
     }
 
     /**
@@ -84,7 +86,7 @@ public final class WindState {
      * and the target timer restarts, so the value holds for a while before the random walk resumes.
      */
     public void set(float directionDegrees, float speed) {
-        this.directionDegrees = wrapDegrees(directionDegrees);
+        this.directionDegrees = Headings.wrapDegrees(directionDegrees);
         this.speed = clampSpeed(speed);
         this.targetSpeed = this.speed;
         this.ticksUntilNewTarget = TARGET_INTERVAL_TICKS;
@@ -95,14 +97,15 @@ public final class WindState {
      * and the speed moves toward a target that is re-rolled every {@link #TARGET_INTERVAL_TICKS} ticks.
      */
     public void tick(RandomSource random) {
-        directionDegrees = wrapDegrees(directionDegrees + (random.nextFloat() * 2.0F - 1.0F) * MAX_DIRECTION_DRIFT);
+        directionDegrees = Headings.wrapDegrees(
+            directionDegrees + (random.nextFloat() * 2.0F - 1.0F) * MAX_DIRECTION_DRIFT);
 
         if (--ticksUntilNewTarget <= 0) {
             targetSpeed = TARGET_SPEED_MIN + random.nextFloat() * (TARGET_SPEED_MAX - TARGET_SPEED_MIN);
             ticksUntilNewTarget = TARGET_INTERVAL_TICKS;
         }
 
-        float step = clamp(targetSpeed - speed, -MAX_SPEED_STEP, MAX_SPEED_STEP);
+        float step = Mth.clamp(targetSpeed - speed, -MAX_SPEED_STEP, MAX_SPEED_STEP);
         float jitter = (random.nextFloat() * 2.0F - 1.0F) * SPEED_JITTER;
         speed = clampSpeed(speed + step + jitter);
     }
@@ -126,31 +129,8 @@ public final class WindState {
         return wind;
     }
 
-    /** Wraps an angle into {@code [0, 360)}. */
-    public static float wrapDegrees(float degrees) {
-        float wrapped = degrees % 360.0F;
-        if (wrapped < 0.0F) {
-            wrapped += 360.0F;
-        }
-        return wrapped >= 360.0F ? 0.0F : wrapped;
-    }
-
-    /** Unit {@code X} component of a compass heading, see {@link #directionDegrees()}. */
-    public static double directionX(float degrees) {
-        return Math.sin(Math.toRadians(degrees));
-    }
-
-    /** Unit {@code Z} component of a compass heading, see {@link #directionDegrees()}. */
-    public static double directionZ(float degrees) {
-        return -Math.cos(Math.toRadians(degrees));
-    }
-
     private static float clampSpeed(float value) {
-        return clamp(value, MIN_SPEED, MAX_SPEED);
-    }
-
-    private static float clamp(float value, float min, float max) {
-        return value < min ? min : Math.min(value, max);
+        return Mth.clamp(value, MIN_SPEED, MAX_SPEED);
     }
 
     @Override

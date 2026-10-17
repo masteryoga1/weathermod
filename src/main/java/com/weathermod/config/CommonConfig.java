@@ -11,7 +11,6 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * whether the fantasy weather pack is active. Stored in {@code config/weathermod-common.toml}.
  */
 public final class CommonConfig {
-    private static final String TRANSLATION_PREFIX = "weathermod.configuration.";
     private static final List<String> DEFAULT_DIMENSIONS = List.of("minecraft:overworld", "minecraft:the_nether");
 
     /** Dimension ids (for example {@code minecraft:overworld}) in which the weather simulation runs. */
@@ -28,13 +27,13 @@ public final class CommonConfig {
         enabledDimensions = builder
                 .comment("Dimensions in which the weather simulation runs, as resource locations such as \"minecraft:overworld\".",
                         "Dimensions not listed here never get storms. An empty list disables the simulation everywhere.")
-                .translation(TRANSLATION_PREFIX + "enabledDimensions")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "enabledDimensions")
                 .defineListAllowEmpty("enabledDimensions", DEFAULT_DIMENSIONS,
                         () -> "minecraft:overworld", CommonConfig::isValidDimensionId);
 
         fantasyPackEnabled = builder
                 .comment("Allow weather types from the fantasy family (blood rain, meteor showers and similar) to spawn naturally.")
-                .translation(TRANSLATION_PREFIX + "fantasyPackEnabled")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "fantasyPackEnabled")
                 .define("fantasyPackEnabled", false);
 
         SPEC = builder.build();

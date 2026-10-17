@@ -3,6 +3,7 @@ package com.weathermod.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.weathermod.core.Headings;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.util.RandomSource;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,7 @@ class WindStateTest {
             assertTrue(speed >= WindState.MIN_SPEED && speed <= WindState.MAX_SPEED,
                 "speed out of range at tick " + tick + ": " + speed);
 
-            float turned = WindState.wrapDegrees(direction - directionBefore);
+            float turned = Headings.wrapDegrees(direction - directionBefore);
             float smallestTurn = Math.min(turned, 360.0F - turned);
             assertTrue(smallestTurn <= WindState.MAX_DIRECTION_DRIFT + EPSILON,
                 "direction jumped " + smallestTurn + " degrees at tick " + tick);
@@ -115,17 +116,13 @@ class WindStateTest {
     }
 
     @Test
-    void directionVectorsFollowTheCompass() {
-        assertEquals(0.0D, WindState.directionX(0.0F), 1.0E-9D);
-        assertEquals(-1.0D, WindState.directionZ(0.0F), 1.0E-9D);
-        assertEquals(1.0D, WindState.directionX(90.0F), 1.0E-9D);
-        assertEquals(0.0D, WindState.directionZ(90.0F), 1.0E-9D);
-        assertEquals(0.0D, WindState.directionX(180.0F), 1.0E-9D);
-        assertEquals(1.0D, WindState.directionZ(180.0F), 1.0E-9D);
-        assertEquals(-1.0D, WindState.directionX(270.0F), 1.0E-9D);
+    void velocityFollowsTheCompass() {
+        WindState east = new WindState(90.0F, 4.0F);
+        assertEquals(4.0D, east.velocityX(), 1.0E-6D);
+        assertEquals(0.0D, east.velocityZ(), 1.0E-6D);
 
-        WindState wind = new WindState(90.0F, 4.0F);
-        assertEquals(4.0D, wind.velocityX(), 1.0E-6D);
-        assertEquals(0.0D, wind.velocityZ(), 1.0E-6D);
+        WindState north = new WindState(0.0F, 2.5F);
+        assertEquals(0.0D, north.velocityX(), 1.0E-6D);
+        assertEquals(-2.5D, north.velocityZ(), 1.0E-6D, "heading 0 is north, toward negative z");
     }
 }

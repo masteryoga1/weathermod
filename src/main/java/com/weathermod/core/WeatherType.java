@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
+import net.minecraft.SharedConstants;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -59,9 +60,6 @@ public record WeatherType(
         ResourceLocation.withDefaultNamespace("overworld"),
         ResourceLocation.withDefaultNamespace("the_nether"));
 
-    /** Game ticks per real second; durations are stored in seconds and simulated in ticks. */
-    public static final int TICKS_PER_SECOND = 20;
-
     /**
      * JSON codec. Every field except {@code family} is optional and falls back to the defaults above.
      * Keys are snake case: {@code duration_seconds}, {@code interest_radius} and so on.
@@ -107,11 +105,6 @@ public record WeatherType(
         return DataResult.success(type);
     }
 
-    /** Starts a builder with every field at its default. */
-    public static Builder builder(WeatherFamily family) {
-        return new Builder(family);
-    }
-
     /** True when the type is enabled and has a positive spawn weight. */
     public boolean spawnsNaturally() {
         return enabled && weight > 0;
@@ -144,7 +137,7 @@ public record WeatherType(
 
     /** Picks a lifetime from the duration range and converts it to game ticks, never less than one tick. */
     public int pickDurationTicks(RandomSource random) {
-        return Math.max(1, Math.round(durationSeconds.sample(random) * TICKS_PER_SECOND));
+        return Math.max(1, Math.round(durationSeconds.sample(random) * SharedConstants.TICKS_PER_SECOND));
     }
 
     /**
@@ -283,111 +276,6 @@ public record WeatherType(
         /** True when every level is zero. */
         public boolean isNone() {
             return rainLevel == 0.0F && thunderLevel == 0.0F && hazeStrength == 0.0F;
-        }
-    }
-
-    /** Mutable builder for code-created weather types, mainly for tests and the fantasy pack. */
-    public static final class Builder {
-        private final WeatherFamily family;
-        private Range intensity = DEFAULT_INTENSITY;
-        private Climate climate = Climate.ANY;
-        private Range durationSeconds = DEFAULT_DURATION_SECONDS;
-        private float radius = DEFAULT_RADIUS;
-        private float interestRadius = DEFAULT_INTEREST_RADIUS;
-        private int weight = DEFAULT_WEIGHT;
-        private Visuals visuals = Visuals.NONE;
-        private Optional<TagKey<Biome>> biomes = Optional.empty();
-        private List<ResourceLocation> dimensions = DEFAULT_DIMENSIONS;
-        private boolean enabled = true;
-
-        private Builder(WeatherFamily family) {
-            this.family = Objects.requireNonNull(family, "family");
-        }
-
-        public Builder intensity(float min, float max) {
-            this.intensity = new Range(min, max);
-            return this;
-        }
-
-        public Builder intensity(Range intensity) {
-            this.intensity = Objects.requireNonNull(intensity, "intensity");
-            return this;
-        }
-
-        public Builder climate(Climate climate) {
-            this.climate = Objects.requireNonNull(climate, "climate");
-            return this;
-        }
-
-        public Builder durationSeconds(float min, float max) {
-            this.durationSeconds = new Range(min, max);
-            return this;
-        }
-
-        public Builder durationSeconds(Range durationSeconds) {
-            this.durationSeconds = Objects.requireNonNull(durationSeconds, "durationSeconds");
-            return this;
-        }
-
-        public Builder radius(float radius) {
-            this.radius = radius;
-            return this;
-        }
-
-        public Builder interestRadius(float interestRadius) {
-            this.interestRadius = interestRadius;
-            return this;
-        }
-
-        public Builder weight(int weight) {
-            this.weight = weight;
-            return this;
-        }
-
-        public Builder visuals(float rainLevel, float thunderLevel, float hazeStrength) {
-            this.visuals = new Visuals(rainLevel, thunderLevel, hazeStrength);
-            return this;
-        }
-
-        public Builder visuals(Visuals visuals) {
-            this.visuals = Objects.requireNonNull(visuals, "visuals");
-            return this;
-        }
-
-        public Builder biomes(TagKey<Biome> biomes) {
-            this.biomes = Optional.of(biomes);
-            return this;
-        }
-
-        public Builder anyBiome() {
-            this.biomes = Optional.empty();
-            return this;
-        }
-
-        public Builder dimensions(List<ResourceLocation> dimensions) {
-            this.dimensions = List.copyOf(dimensions);
-            return this;
-        }
-
-        public Builder dimensions(ResourceLocation... dimensions) {
-            this.dimensions = List.of(dimensions);
-            return this;
-        }
-
-        public Builder enabled(boolean enabled) {
-            this.enabled = enabled;
-            return this;
-        }
-
-        /**
-         * Builds the type, applying the same checks as the codec.
-         *
-         * @throws IllegalArgumentException when a range or radius is inconsistent
-         */
-        public WeatherType build() {
-            WeatherType type = new WeatherType(family, intensity, climate, durationSeconds, radius, interestRadius,
-                weight, visuals, biomes, dimensions, enabled);
-            return validate(type).getOrThrow(IllegalArgumentException::new);
         }
     }
 }

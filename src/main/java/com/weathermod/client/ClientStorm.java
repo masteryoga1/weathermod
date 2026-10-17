@@ -1,7 +1,9 @@
 package com.weathermod.client;
 
+import com.weathermod.core.Headings;
 import com.weathermod.network.StormSnapshot;
 import java.util.Objects;
+import net.minecraft.SharedConstants;
 import net.minecraft.resources.ResourceLocation;
 
 /**
@@ -10,9 +12,6 @@ import net.minecraft.resources.ResourceLocation;
  * snapshot overwrites the prediction.
  */
 public final class ClientStorm {
-    /** Game ticks per real second, used to turn blocks-per-second speeds into per-tick movement. */
-    public static final int TICKS_PER_SECOND = 20;
-
     private final int id;
     private ResourceLocation typeId;
     private double prevX;
@@ -69,17 +68,11 @@ public final class ClientStorm {
         this.prevY = y;
         this.prevZ = z;
         this.prevIntensity = intensity;
-        double blocksThisTick = speed / TICKS_PER_SECOND;
-        this.x += directionX(headingDegrees) * blocksThisTick;
-        this.z += directionZ(headingDegrees) * blocksThisTick;
+        double blocksThisTick = speed / SharedConstants.TICKS_PER_SECOND;
+        this.x += Headings.directionX(headingDegrees) * blocksThisTick;
+        this.z += Headings.directionZ(headingDegrees) * blocksThisTick;
         this.ageTicks++;
         this.ticksSinceUpdate++;
-    }
-
-    /** Snapshot of the current (not interpolated) state, in the same shape the server sends. */
-    public StormSnapshot toSnapshot() {
-        return new StormSnapshot(id, typeId, x, y, z, headingDegrees, speed, intensity, radius, interestRadius,
-            ageTicks, maxAgeTicks);
     }
 
     /** Storm id, unique within the dimension the client is in. */
@@ -164,12 +157,12 @@ public final class ClientStorm {
 
     /** Age in whole real seconds. */
     public int ageSeconds() {
-        return ageTicks / TICKS_PER_SECOND;
+        return ageTicks / SharedConstants.TICKS_PER_SECOND;
     }
 
     /** Maximum age in whole real seconds. */
     public int maxAgeSeconds() {
-        return maxAgeTicks / TICKS_PER_SECOND;
+        return maxAgeTicks / SharedConstants.TICKS_PER_SECOND;
     }
 
     /** Ticks left before the storm expires, never negative. */
@@ -186,12 +179,11 @@ public final class ClientStorm {
         return fraction < 0.0F ? 0.0F : Math.min(fraction, 1.0F);
     }
 
-    /** Whether the local age has reached the maximum; the server's removal payload normally arrives first. */
-    public boolean isExpired() {
-        return ageTicks >= maxAgeTicks;
-    }
-
-    /** Client ticks since the last snapshot from the server; large values mean the storm is out of sync. */
+    /**
+     * Client ticks since the last snapshot from the server. In-range storms are re-sent every sync interval, so
+     * once this passes {@link ClientWeatherState#STALE_TICKS} the storm has left the player's interest radius and
+     * {@link ClientWeatherState#tick()} drops it.
+     */
     public int ticksSinceUpdate() {
         return ticksSinceUpdate;
     }
@@ -211,16 +203,6 @@ public final class ClientStorm {
     /** Whether a point is inside the storm's effect radius, measured horizontally. */
     public boolean isWithinRadius(double px, double pz) {
         return distanceToSqr(px, pz) <= (double) radius * radius;
-    }
-
-    /** Unit {@code X} component of a compass heading, matching the server's wind convention. */
-    public static double directionX(float degrees) {
-        return Math.sin(Math.toRadians(degrees));
-    }
-
-    /** Unit {@code Z} component of a compass heading, matching the server's wind convention. */
-    public static double directionZ(float degrees) {
-        return -Math.cos(Math.toRadians(degrees));
     }
 
     private void copyFrom(StormSnapshot snapshot) {

@@ -1,13 +1,16 @@
 package com.weathermod.server;
 
+import com.weathermod.core.Headings;
 import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherType;
 import com.weathermod.core.WeatherTypes;
 import com.weathermod.network.StormSnapshot;
+import net.minecraft.SharedConstants;
 import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 
 /**
@@ -23,11 +26,6 @@ public final class StormInstance {
     public static final float RAMP_DOWN_FRACTION = 0.2F;
     /** Fastest speed a steered storm may be given, in blocks per second. */
     public static final float MAX_STEER_SPEED = 64.0F;
-    /** Game ticks in one real second. */
-    public static final int TICKS_PER_SECOND = 20;
-
-    private static final float DEFAULT_RADIUS = 96.0F;
-    private static final float DEFAULT_INTEREST_RADIUS = 512.0F;
 
     private static final String KEY_ID = "Id";
     private static final String KEY_TYPE = "Type";
@@ -72,9 +70,9 @@ public final class StormInstance {
         this.x = x;
         this.y = y;
         this.z = z;
-        this.headingDegrees = WindState.wrapDegrees(headingDegrees);
-        this.speed = clamp(speed, 0.0F, MAX_STEER_SPEED);
-        this.peakIntensity = clamp(peakIntensity, 0.0F, 1.0F);
+        this.headingDegrees = Headings.wrapDegrees(headingDegrees);
+        this.speed = Mth.clamp(speed, 0.0F, MAX_STEER_SPEED);
+        this.peakIntensity = Mth.clamp(peakIntensity, 0.0F, 1.0F);
         this.ageTicks = Math.max(0, ageTicks);
         this.maxAgeTicks = Math.max(1, maxAgeTicks);
         this.radius = Math.max(0.0F, radius);
@@ -108,9 +106,9 @@ public final class StormInstance {
             headingDegrees = wind.directionDegrees();
             speed = wind.speed();
         }
-        double blocksThisTick = speed / TICKS_PER_SECOND;
-        x += WindState.directionX(headingDegrees) * blocksThisTick;
-        z += WindState.directionZ(headingDegrees) * blocksThisTick;
+        double blocksThisTick = speed / SharedConstants.TICKS_PER_SECOND;
+        x += Headings.directionX(headingDegrees) * blocksThisTick;
+        z += Headings.directionZ(headingDegrees) * blocksThisTick;
         ageTicks++;
         intensity = peakIntensity * lifeEnvelope(ageTicks, maxAgeTicks);
         dirty = true;
@@ -129,7 +127,7 @@ public final class StormInstance {
         if (maxAgeTicks <= 0) {
             return 1.0F;
         }
-        float life = clamp(ageTicks / (float) maxAgeTicks, 0.0F, 1.0F);
+        float life = Mth.clamp(ageTicks / (float) maxAgeTicks, 0.0F, 1.0F);
         if (life < RAMP_UP_FRACTION) {
             return life / RAMP_UP_FRACTION;
         }
@@ -161,21 +159,23 @@ public final class StormInstance {
 
     /**
      * Reads a storm written by {@link #save()}. An unparseable type id falls back to the placeholder type;
-     * missing radii fall back to the defaults. The loaded storm is not dirty.
+     * missing radii fall back to the weather type defaults. The loaded storm is not dirty.
      */
     public static StormInstance load(CompoundTag tag) {
         ResourceLocation typeId = ResourceLocation.tryParse(tag.getString(KEY_TYPE));
         ResourceKey<WeatherType> type = typeId != null ? WeatherRegistries.key(typeId) : WeatherTypes.PLACEHOLDER;
         double y = tag.contains(KEY_Y) ? tag.getDouble(KEY_Y) : DEFAULT_CLOUD_BASE;
-        float radius = tag.contains(KEY_RADIUS) ? tag.getFloat(KEY_RADIUS) : DEFAULT_RADIUS;
-        float interestRadius = tag.contains(KEY_INTEREST_RADIUS) ? tag.getFloat(KEY_INTEREST_RADIUS) : DEFAULT_INTEREST_RADIUS;
+        float radius = tag.contains(KEY_RADIUS) ? tag.getFloat(KEY_RADIUS) : WeatherType.DEFAULT_RADIUS;
+        float interestRadius = tag.contains(KEY_INTEREST_RADIUS)
+            ? tag.getFloat(KEY_INTEREST_RADIUS)
+            : WeatherType.DEFAULT_INTEREST_RADIUS;
         float peak = tag.contains(KEY_PEAK_INTENSITY) ? tag.getFloat(KEY_PEAK_INTENSITY) : tag.getFloat(KEY_INTENSITY);
 
         StormInstance storm = new StormInstance(tag.getInt(KEY_ID), type, tag.getDouble(KEY_X), y,
             tag.getDouble(KEY_Z), tag.getFloat(KEY_HEADING), tag.getFloat(KEY_SPEED), peak, tag.getInt(KEY_AGE),
             tag.getInt(KEY_MAX_AGE), radius, interestRadius);
         if (tag.contains(KEY_INTENSITY)) {
-            storm.intensity = clamp(tag.getFloat(KEY_INTENSITY), 0.0F, 1.0F);
+            storm.intensity = Mth.clamp(tag.getFloat(KEY_INTENSITY), 0.0F, 1.0F);
         }
         storm.steered = tag.getBoolean(KEY_STEERED);
         storm.dirty = false;
@@ -188,32 +188,27 @@ public final class StormInstance {
             interestRadius, ageTicks, maxAgeTicks);
     }
 
-    /** Sets both peak and current intensity, clamped to {@code [0, 1]}. The life envelope still applies on later ticks. */
-    public void setIntensity(float value) {
-        this.peakIntensity = clamp(value, 0.0F, 1.0F);
-        this.intensity = this.peakIntensity;
+    /**
+     * Sets the peak intensity, clamped to {@code [0, 1]}, and re-derives the current intensity from it through the
+     * life envelope exactly as the constructor and {@link #tick} do, so the next sync and the next tick agree.
+     */
+    public void setPeakIntensity(float value) {
+        this.peakIntensity = Mth.clamp(value, 0.0F, 1.0F);
+        this.intensity = this.peakIntensity * lifeEnvelope(this.ageTicks, this.maxAgeTicks);
         this.dirty = true;
     }
 
     /** Overrides the wind with a fixed heading and speed until {@link #releaseSteering()} is called. */
     public void steer(float headingDegrees, float speed) {
         this.steered = true;
-        this.headingDegrees = WindState.wrapDegrees(headingDegrees);
-        this.speed = clamp(speed, 0.0F, MAX_STEER_SPEED);
+        this.headingDegrees = Headings.wrapDegrees(headingDegrees);
+        this.speed = Mth.clamp(speed, 0.0F, MAX_STEER_SPEED);
         this.dirty = true;
     }
 
     /** Lets the storm follow the wind again from the next tick. */
     public void releaseSteering() {
         this.steered = false;
-        this.dirty = true;
-    }
-
-    /** Moves the storm to an absolute position. */
-    public void setPosition(double x, double y, double z) {
-        this.x = x;
-        this.y = y;
-        this.z = z;
         this.dirty = true;
     }
 
@@ -313,17 +308,9 @@ public final class StormInstance {
         return dirty;
     }
 
-    public void markDirty() {
-        this.dirty = true;
-    }
-
     /** Called after the storm has been sent to interested players. */
     public void clearDirty() {
         this.dirty = false;
-    }
-
-    private static float clamp(float value, float min, float max) {
-        return value < min ? min : Math.min(value, max);
     }
 
     @Override

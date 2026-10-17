@@ -15,7 +15,8 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 /**
  * Drives the server-side weather every level tick and keeps clients in step: storms and wind advance, expired
- * storms are announced, dirty storms are sent to interested players and joining players receive the full list.
+ * storms are announced, dirty storms are sent to interested players and players who join, respawn or change
+ * dimension receive the full list.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID)
 public final class WeatherSimulator {
@@ -41,6 +42,17 @@ public final class WeatherSimulator {
 
     @SubscribeEvent
     public static void onPlayerChangedDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (event.getEntity() instanceof ServerPlayer player) {
+            sendFullState(player);
+        }
+    }
+
+    /**
+     * Respawning builds a new player in the respawn dimension without a dimension-change event, so the storm list
+     * is resent here; otherwise storms of the dimension the player died in would linger on the client.
+     */
+    @SubscribeEvent
+    public static void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
             sendFullState(player);
         }

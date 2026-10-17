@@ -141,7 +141,7 @@ class StormInstanceNbtTest {
         StormInstance storm = sampleStorm();
         storm.clearDirty();
 
-        storm.setIntensity(4.0F);
+        storm.setPeakIntensity(4.0F);
         assertEquals(1.0F, storm.peakIntensity(), EPSILON);
         assertEquals(1.0F, storm.intensity(), EPSILON);
         assertTrue(storm.isDirty());
@@ -149,5 +149,20 @@ class StormInstanceNbtTest {
         storm.steer(-90.0F, 1000.0F);
         assertEquals(270.0F, storm.headingDegrees(), EPSILON);
         assertEquals(StormInstance.MAX_STEER_SPEED, storm.speed(), EPSILON);
+    }
+
+    @Test
+    void peakIntensityIsShapedByTheLifeEnvelope() {
+        StormInstance storm = new StormInstance(3, WeatherRegistries.key("placeholder"), 0.0D, 160.0D, 0.0D,
+            0.0F, 0.0F, 0.2F, 0, 2400, 64.0F, 512.0F);
+
+        storm.setPeakIntensity(0.8F);
+
+        assertEquals(0.8F, storm.peakIntensity(), EPSILON);
+        assertEquals(0.0F, storm.intensity(), EPSILON, "a newborn storm starts at zero however high its peak");
+
+        storm.tick(new WindState(0.0F, 0.0F));
+        assertEquals(0.8F * StormInstance.lifeEnvelope(1, 2400), storm.intensity(), EPSILON,
+            "the first tick continues the same envelope instead of jumping");
     }
 }
