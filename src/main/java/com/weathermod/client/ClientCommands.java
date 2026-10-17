@@ -3,6 +3,7 @@ package com.weathermod.client;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.weathermod.WeatherMod;
+import com.weathermod.core.PrecipitationKind;
 import java.util.Locale;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -15,8 +16,8 @@ import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
 /**
  * Client-only commands under {@code /weathermodc}: {@code overlay [on|off]} toggles the debug overlay and
- * {@code storms} prints the wind and every storm the client knows into the chat. They run entirely on the client
- * and never reach the server.
+ * {@code storms} prints the wind, the climate at the player and every storm the client knows into the chat. They
+ * run entirely on the client and never reach the server.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID, value = Dist.CLIENT)
 public final class ClientCommands {
@@ -35,10 +36,20 @@ public final class ClientCommands {
     public static final String STORMS_HEADER = "command.weathermod.client.storms.header";
     /** Feedback line per storm; arguments: id, type, distance, intensity percent, age seconds, max age seconds. */
     public static final String STORMS_ENTRY = "command.weathermod.client.storms.entry";
-    /** Feedback line for the wind; arguments: direction degrees, speed. */
+    /** Feedback line for the wind without a gust; arguments: direction degrees, speed. */
     public static final String STORMS_WIND = "command.weathermod.client.storms.wind";
+    /** Feedback line for the wind during a gust; arguments: direction degrees, speed, gust speed. */
+    public static final String STORMS_WIND_GUST = "command.weathermod.client.storms.wind_gust";
     /** Feedback line for the wind before the first wind update. */
     public static final String STORMS_WIND_UNKNOWN = "command.weathermod.client.storms.wind_unknown";
+    /** Feedback line for the climate; arguments: temperature, humidity, precipitation kind, season name, progress percent. */
+    public static final String STORMS_CLIMATE = "command.weathermod.client.storms.climate";
+    /** Feedback line for the climate in a dimension without seasons; arguments: temperature, humidity, precipitation kind. */
+    public static final String STORMS_CLIMATE_NO_SEASON = "command.weathermod.client.storms.climate_no_season";
+    /** Feedback line for the climate before the first climate update. */
+    public static final String STORMS_CLIMATE_UNKNOWN = "command.weathermod.client.storms.climate_unknown";
+    /** Prefix of the translation keys naming each {@link PrecipitationKind}; the lower-case kind name follows. */
+    public static final String PRECIPITATION_KIND_PREFIX = "command.weathermod.client.storms.kind.";
 
     private ClientCommands() {
     }
@@ -74,18 +85,16 @@ public final class ClientCommands {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** Prints the wind and one line per known storm, measured from the command source's position. */
+    /**
+     * Prints the wind, the climate at the player and one line per known storm, measured from the command source's
+     * position.
+     */
     public static int listStorms(CommandSourceStack source) {
         ClientWeatherState state = ClientWeatherState.INSTANCE;
         Vec3 position = source.getPosition();
 
-        if (state.hasWind()) {
-            String direction = String.format(Locale.ROOT, "%.0f", state.windDirectionDegrees());
-            String speed = String.format(Locale.ROOT, "%.1f", state.windSpeed());
-            source.sendSuccess(() -> Component.translatable(STORMS_WIND, direction, speed), false);
-        } else {
-            source.sendSuccess(() -> Component.translatable(STORMS_WIND_UNKNOWN), false);
-        }
+        source.sendSuccess(() -> windLine(state), false);
+        source.sendSuccess(() -> climateLine(state), false);
 
         if (state.isEmpty()) {
             source.sendSuccess(() -> Component.translatable(STORMS_NONE), false);
@@ -101,5 +110,40 @@ public final class ClientCommands {
                 distance, percent, storm.ageSeconds(), storm.maxAgeSeconds()), false);
         }
         return count;
+    }
+
+    /** The chat line for the wind: direction and speed, plus the gust speed while a gust blows. */
+    public static Component windLine(ClientWeatherState state) {
+        if (!state.hasWind()) {
+            return Component.translatable(STORMS_WIND_UNKNOWN);
+        }
+        String direction = String.format(Locale.ROOT, "%.0f", state.windDirectionDegrees());
+        String speed = String.format(Locale.ROOT, "%.1f", state.windSpeed());
+        if (state.isWindGusting()) {
+            String gust = String.format(Locale.ROOT, "%.1f", state.windGustSpeed());
+            return Component.translatable(STORMS_WIND_GUST, direction, speed, gust);
+        }
+        return Component.translatable(STORMS_WIND, direction, speed);
+    }
+
+    /** The chat line for the climate: temperature, humidity, what would fall and the season with its progress. */
+    public static Component climateLine(ClientWeatherState state) {
+        if (!state.hasClimate()) {
+            return Component.translatable(STORMS_CLIMATE_UNKNOWN);
+        }
+        String temperature = String.format(Locale.ROOT, "%.2f", state.temperature());
+        String humidity = String.format(Locale.ROOT, "%.2f", state.humidity());
+        Component kind = Component.translatable(precipitationKindKey(state.precipitationKind()));
+        if (!state.hasSeason()) {
+            return Component.translatable(STORMS_CLIMATE_NO_SEASON, temperature, humidity, kind);
+        }
+        int progressPercent = Math.round(state.seasonProgress() * 100.0F);
+        return Component.translatable(STORMS_CLIMATE, temperature, humidity, kind, state.seasonName(),
+            progressPercent);
+    }
+
+    /** Translation key naming a precipitation kind in chat, such as {@code command.weathermod.client.storms.kind.rain}. */
+    public static String precipitationKindKey(PrecipitationKind kind) {
+        return PRECIPITATION_KIND_PREFIX + kind.name().toLowerCase(Locale.ROOT);
     }
 }

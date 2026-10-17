@@ -34,6 +34,7 @@ import net.minecraft.world.level.biome.Biome;
  * @param interestRadius  players farther than this from the centre never receive the storm, in blocks
  * @param weight          the natural spawn weight, 0 meaning the type only spawns through commands
  * @param visuals         the vanilla rain, thunder and haze levels the client writes at full intensity
+ * @param precipitation   what falls from the storm: chosen by temperature, fixed, or nothing
  * @param biomes          the biome tag the type may form in, empty meaning any biome
  * @param dimensions      the dimension ids the type may form in
  * @param enabled         whether the type is used at all
@@ -47,6 +48,7 @@ public record WeatherType(
     float interestRadius,
     int weight,
     Visuals visuals,
+    PrecipitationMode precipitation,
     Optional<TagKey<Biome>> biomes,
     List<ResourceLocation> dimensions,
     boolean enabled
@@ -56,6 +58,7 @@ public record WeatherType(
     public static final float DEFAULT_RADIUS = 96.0F;
     public static final float DEFAULT_INTEREST_RADIUS = 512.0F;
     public static final int DEFAULT_WEIGHT = 10;
+    public static final PrecipitationMode DEFAULT_PRECIPITATION = PrecipitationMode.AUTO;
     public static final List<ResourceLocation> DEFAULT_DIMENSIONS = List.of(
         ResourceLocation.withDefaultNamespace("overworld"),
         ResourceLocation.withDefaultNamespace("the_nether"));
@@ -73,6 +76,7 @@ public record WeatherType(
         ExtraCodecs.POSITIVE_FLOAT.optionalFieldOf("interest_radius", DEFAULT_INTEREST_RADIUS).forGetter(WeatherType::interestRadius),
         ExtraCodecs.NON_NEGATIVE_INT.optionalFieldOf("weight", DEFAULT_WEIGHT).forGetter(WeatherType::weight),
         Visuals.CODEC.optionalFieldOf("visuals", Visuals.NONE).forGetter(WeatherType::visuals),
+        PrecipitationMode.CODEC.optionalFieldOf("precipitation", DEFAULT_PRECIPITATION).forGetter(WeatherType::precipitation),
         TagKey.codec(Registries.BIOME).optionalFieldOf("biomes").forGetter(WeatherType::biomes),
         ResourceLocation.CODEC.listOf().optionalFieldOf("dimensions", DEFAULT_DIMENSIONS).forGetter(WeatherType::dimensions),
         Codec.BOOL.optionalFieldOf("enabled", true).forGetter(WeatherType::enabled)
@@ -87,6 +91,7 @@ public record WeatherType(
         Objects.requireNonNull(climate, "climate");
         Objects.requireNonNull(durationSeconds, "durationSeconds");
         Objects.requireNonNull(visuals, "visuals");
+        Objects.requireNonNull(precipitation, "precipitation");
         Objects.requireNonNull(biomes, "biomes");
         dimensions = List.copyOf(Objects.requireNonNull(dimensions, "dimensions"));
     }
@@ -108,6 +113,14 @@ public record WeatherType(
     /** True when the type is enabled and has a positive spawn weight. */
     public boolean spawnsNaturally() {
         return enabled && weight > 0;
+    }
+
+    /**
+     * True when storms of this type drop something: the family is {@link WeatherFamily#PRECIPITATION} and the
+     * precipitation mode is not {@link PrecipitationMode#NONE}. Only such types switch vanilla rain on.
+     */
+    public boolean precipitates() {
+        return family == WeatherFamily.PRECIPITATION && precipitation != PrecipitationMode.NONE;
     }
 
     /** True when the type may form in the given dimension. */
@@ -208,12 +221,13 @@ public record WeatherType(
     }
 
     /**
-     * The biome climate window a type may form in. Temperature uses vanilla biome temperature
-     * (roughly -0.7 for frozen peaks to 2.0 for deserts), humidity uses vanilla downfall (0 to 1).
+     * The biome climate window a type may form in. Temperature uses the vanilla biome temperature scale (roughly
+     * -0.7 for frozen peaks to 2.0 for deserts) as shifted by the server's climate field, which reports values in
+     * {@code [-1, 2.5]}; humidity uses vanilla downfall (0 to 1).
      */
     public record Climate(float minTemperature, float maxTemperature, float minHumidity, float maxHumidity) {
-        /** The whole vanilla climate space; the default when a type gives no climate. */
-        public static final Climate ANY = new Climate(-1.0F, 2.0F, 0.0F, 1.0F);
+        /** The whole range the climate field can report; the default when a type gives no climate. */
+        public static final Climate ANY = new Climate(-1.0F, 2.5F, 0.0F, 1.0F);
 
         public static final Codec<Climate> CODEC = RecordCodecBuilder.<Climate>create(instance -> instance.group(
             Codec.FLOAT.optionalFieldOf("min_temperature", ANY.minTemperature()).forGetter(Climate::minTemperature),

@@ -21,5 +21,6 @@
     "rain_level": 1.0,
     "thunder_level": 0.0,
     "haze_strength": 0.3
-  }
+  },
+  "precipitation": "auto"
 }

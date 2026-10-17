@@ -31,3 +31,10 @@ description='''${mod_description}'''
     versionRange="[1.8.0,)"
     ordering="AFTER"
     side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="sereneseasons"
+    type="optional"
+    versionRange="[10.0,)"
+    ordering="AFTER"
+    side="BOTH"

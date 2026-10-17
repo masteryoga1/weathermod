@@ -81,6 +81,8 @@ sourceSets.main.resources { srcDir 'src/generated/resources' }
 dependencies {
     // Iris is only used to ask whether a shader pack is active. Never required at runtime.
     compileOnly "maven.modrinth:iris:${iris_version}"
+    // Serene Seasons is only used to read its season state when it is installed. Never required at runtime.
+    compileOnly "maven.modrinth:serene-seasons:${serene_seasons_version}"
 
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'

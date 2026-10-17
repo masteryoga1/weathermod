@@ -20,7 +20,7 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 @EventBusSubscriber(modid = WeatherMod.MOD_ID)
 public final class WeatherNetwork {
     /** Network protocol version; bump it whenever a payload's wire format changes. */
-    public static final String PROTOCOL_VERSION = "1";
+    public static final String PROTOCOL_VERSION = "2";
 
     private WeatherNetwork() {
     }
@@ -36,6 +36,8 @@ public final class WeatherNetwork {
             (payload, context) -> ClientPayloadHandler.handleStormRemoved(payload, context));
         registrar.playToClient(WindUpdatePayload.TYPE, WindUpdatePayload.STREAM_CODEC,
             (payload, context) -> ClientPayloadHandler.handleWindUpdate(payload, context));
+        registrar.playToClient(ClimateUpdatePayload.TYPE, ClimateUpdatePayload.STREAM_CODEC,
+            (payload, context) -> ClientPayloadHandler.handleClimateUpdate(payload, context));
         WeatherMod.LOGGER.debug("Registered weather payloads for protocol version {}", PROTOCOL_VERSION);
     }
 

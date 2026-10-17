@@ -18,8 +18,9 @@
   "interest_radius": 512.0,
   "weight": 10,
   "visuals": {
-    "rain_level": 0.4,
+    "rain_level": 0.35,
     "thunder_level": 0.0,
     "haze_strength": 0.2
-  }
+  },
+  "precipitation": "auto"
 }
