@@ -1,0 +1,15 @@
+{
+  "family": "obscurant",
+  "weight": 0,
+  "radius": 64.0,
+  "interest_radius": 512.0,
+  "duration_seconds": {
+    "min": 120.0,
+    "max": 120.0
+  },
+  "visuals": {
+    "rain_level": 0.0,
+    "thunder_level": 0.0,
+    "haze_strength": 0.3
+  }
+}
