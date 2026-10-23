@@ -8,6 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.weathermod.client.particle.WeatherParticleEmitter;
+import com.weathermod.client.render.FogEnhancer;
+import com.weathermod.client.render.PrecipitationRenderer;
+import com.weathermod.client.render.RainSplashes;
+import com.weathermod.client.render.WeatherLevelDriver;
+import com.weathermod.client.sound.WeatherAmbience;
 import com.weathermod.server.WeatherManager;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -20,11 +26,16 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Checks the config specs build with the documented defaults, that the pre-load defaults in {@code WeatherManager}
- * agree with them, and that every translation key they declare has an English string. Needs no Minecraft bootstrap.
+ * and in the client weather systems agree with them, and that every translation key they declare has an English
+ * string. Needs no Minecraft bootstrap.
  */
 class ConfigSpecTest {
     private static final String LANG_PATH = "/assets/weathermod/lang/en_us.json";
     private static final String COMMAND_PREFIX = "command.weathermod.";
+
+    /** The client toggles for the client weather systems, in the order they follow {@code debugOverlay}. */
+    private static final List<String> CLIENT_TOGGLE_KEYS = List.of(
+        "rainLevelDriver", "precipitationRenderer", "hazeParticles", "windParticles");
 
     /** Every command translation key the server commands and the client commands use. */
     private static final List<String> COMMAND_KEYS = List.of(
@@ -91,6 +102,43 @@ class ConfigSpecTest {
         assertEquals(1.0D, ClientConfig.hazeStrength.getDefault());
         assertEquals(1.0D, ClientConfig.soundVolume.getDefault());
         assertEquals(false, ClientConfig.debugOverlay.getDefault());
+        assertEquals(true, ClientConfig.rainLevelDriver.getDefault());
+        assertEquals(true, ClientConfig.precipitationRenderer.getDefault());
+        assertEquals(true, ClientConfig.hazeParticles.getDefault());
+        assertEquals(true, ClientConfig.windParticles.getDefault());
+    }
+
+    @Test
+    void clientTogglesAreBooleansWithTranslatedNamesAndTooltips() throws Exception {
+        JsonObject lang = loadLang();
+        List<String> missing = new ArrayList<>();
+        for (String name : CLIENT_TOGGLE_KEYS) {
+            ModConfigSpec.ValueSpec spec = ClientConfig.SPEC.getSpec().get(name);
+            assertNotNull(spec, "no ValueSpec for " + name);
+            assertEquals(true, spec.getDefault(), name + " defaults to on");
+            assertTrue(spec.test(true), name + " accepts true");
+            assertTrue(spec.test(false), name + " accepts false");
+            assertFalse(spec.test("yes"), name + " rejects a string");
+            String key = ConfigSetup.TRANSLATION_PREFIX + name;
+            assertEquals(key, spec.getTranslationKey());
+            checkKey(lang, key, missing);
+            checkKey(lang, key + ".tooltip", missing);
+        }
+        assertTrue(missing.isEmpty(), "Missing client toggle translation keys in " + LANG_PATH + ": " + missing);
+    }
+
+    @Test
+    void clientPreLoadDefaultsAgreeWithSpec() {
+        assertEquals(ClientConfig.rainLevelDriver.getDefault(), WeatherLevelDriver.DEFAULT_RAIN_LEVEL_DRIVER);
+        assertEquals(ClientConfig.precipitationRenderer.getDefault(),
+            PrecipitationRenderer.DEFAULT_PRECIPITATION_RENDERER);
+        assertEquals(ClientConfig.hazeParticles.getDefault(), WeatherParticleEmitter.DEFAULT_HAZE_PARTICLES);
+        assertEquals(ClientConfig.windParticles.getDefault(), WeatherParticleEmitter.DEFAULT_WIND_PARTICLES);
+        assertEquals(ClientConfig.particleDensity.getDefault(), WeatherParticleEmitter.DEFAULT_PARTICLE_DENSITY);
+        assertEquals(ClientConfig.particleDensity.getDefault(), RainSplashes.DEFAULT_PARTICLE_DENSITY);
+        assertEquals(ClientConfig.hazeStrength.getDefault(), WeatherParticleEmitter.DEFAULT_HAZE_STRENGTH);
+        assertEquals(ClientConfig.hazeStrength.getDefault(), FogEnhancer.DEFAULT_HAZE_STRENGTH);
+        assertEquals(ClientConfig.soundVolume.getDefault(), WeatherAmbience.DEFAULT_SOUND_VOLUME);
     }
 
     @Test

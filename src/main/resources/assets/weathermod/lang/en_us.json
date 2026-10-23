@@ -94,6 +94,8 @@
   "weathermod.configuration.endStormsOnSleep.tooltip": "End the precipitation storms covering players who sleep through the night, as vanilla ends its rain. The storms ramp down instead of vanishing at once.",
   "weathermod.configuration.fantasyPackEnabled": "Fantasy Weather Pack",
   "weathermod.configuration.fantasyPackEnabled.tooltip": "Allow weather types from the fantasy family, such as blood rain and meteor showers, to spawn naturally.",
+  "weathermod.configuration.hazeParticles": "Haze Particles",
+  "weathermod.configuration.hazeParticles.tooltip": "Spawn drifting haze particles under fog, overcast and storms.",
   "weathermod.configuration.hazeStrength": "Haze Strength",
   "weathermod.configuration.hazeStrength.tooltip": "Multiplier on fog and haze thickness caused by storms. 0.0 disables the fog enhancer.",
   "weathermod.configuration.iceFormation": "Ice Formation",
@@ -106,6 +108,10 @@
   "weathermod.configuration.naturalSpawnIntervalSeconds.tooltip": "Real seconds between the storm director's natural spawn attempts at a storm frequency of 1.0. Each wait is divided by the frequency and varied by up to half either way.",
   "weathermod.configuration.particleDensity": "Particle Density",
   "weathermod.configuration.particleDensity.tooltip": "Multiplier on the number of rain, snow, dust and debris particles. 0.0 disables them, 2.0 doubles them.",
+  "weathermod.configuration.precipitationRenderer": "Precipitation Renderer",
+  "weathermod.configuration.precipitationRenderer.tooltip": "Draw rain, snow and sleet with the mod's renderer inside the vanilla rain hook. Off: vanilla draws its own rain at the driven rain level.",
+  "weathermod.configuration.rainLevelDriver": "Rain Level Driver",
+  "weathermod.configuration.rainLevelDriver.tooltip": "Write the vanilla rain and thunder levels from nearby storms each tick, which is what shader packs read for darkening, wet surfaces and puddles.",
   "weathermod.configuration.section.weathermod.client.toml": "Client",
   "weathermod.configuration.section.weathermod.client.toml.title": "%s: Client Settings",
   "weathermod.configuration.section.weathermod.common.toml": "Common",
@@ -126,5 +132,7 @@
   "weathermod.configuration.syncIntervalTicks.tooltip": "Ticks between storm update packets sent to nearby players. Lower is smoother but uses more bandwidth.",
   "weathermod.configuration.title": "%s Configuration",
   "weathermod.configuration.vanillaWeatherBridge": "Vanilla Weather Bridge",
-  "weathermod.configuration.vanillaWeatherBridge.tooltip": "Keep vanilla rain and thunder in step with the mod's storms: vanilla rains while a precipitation storm covers a player and is dry otherwise, so crops, cauldrons and fishing respond. Off leaves the vanilla weather cycle alone."
+  "weathermod.configuration.vanillaWeatherBridge.tooltip": "Keep vanilla rain and thunder in step with the mod's storms: vanilla rains while a precipitation storm covers a player and is dry otherwise, so crops, cauldrons and fishing respond. Off leaves the vanilla weather cycle alone.",
+  "weathermod.configuration.windParticles": "Wind Particles",
+  "weathermod.configuration.windParticles.tooltip": "Spawn dust and leaves blown by the wind."
 }

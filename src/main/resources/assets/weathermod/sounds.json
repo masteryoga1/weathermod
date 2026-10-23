@@ -1,0 +1,47 @@
+{
+  "ambient.rain_heavy": {
+    "category": "weather",
+    "sounds": [
+      {
+        "name": "weathermod:ambient/rain_heavy",
+        "stream": false
+      }
+    ]
+  },
+  "ambient.rain_light": {
+    "category": "weather",
+    "sounds": [
+      {
+        "name": "weathermod:ambient/rain_light",
+        "stream": false
+      }
+    ]
+  },
+  "ambient.rain_roof": {
+    "category": "weather",
+    "sounds": [
+      {
+        "name": "weathermod:ambient/rain_roof",
+        "stream": false
+      }
+    ]
+  },
+  "ambient.snow": {
+    "category": "weather",
+    "sounds": [
+      {
+        "name": "weathermod:ambient/snow",
+        "stream": false
+      }
+    ]
+  },
+  "ambient.wind": {
+    "category": "weather",
+    "sounds": [
+      {
+        "name": "weathermod:ambient/wind",
+        "stream": false
+      }
+    ]
+  }
+}
