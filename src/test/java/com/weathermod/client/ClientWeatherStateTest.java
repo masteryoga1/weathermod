@@ -25,6 +25,9 @@ import org.junit.jupiter.api.Test;
 class ClientWeatherStateTest {
     private static final float EPSILON = 1.0E-4F;
     private static final double DELTA = 1.0E-6D;
+    /** The local line the short {@code buildLines} overload reports: no weather, vanilla rain, no shader pack. */
+    private static final String LOCAL_NONE =
+        "Local: rain 0.00 thunder 0.00 haze 0.00 none | renderer vanilla | shaders off";
 
     private static StormSnapshot snapshot(int id, double x, double z, float heading, float speed, float intensity,
                                           int ageTicks, int maxAgeTicks) {
@@ -288,22 +291,61 @@ class ClientWeatherStateTest {
     }
 
     @Test
-    void overlayLinesListHeaderWindClimateCountAndStorms() {
+    void overlayLinesListHeaderWindClimateLocalCountAndStorms() {
         ClientWeatherState state = new ClientWeatherState();
         List<String> empty = WeatherDebugOverlay.buildLines(state, 0.0D, 0.0D, 0.0F);
         assertEquals(List.of(WeatherDebugOverlay.HEADER, WeatherDebugOverlay.WIND_UNKNOWN,
-            WeatherDebugOverlay.CLIMATE_UNKNOWN, "Storms: 0"), empty);
+            WeatherDebugOverlay.CLIMATE_UNKNOWN, LOCAL_NONE, "Storms: 0"), empty);
 
         state.apply(new WindUpdatePayload(215.4F, 3.25F));
         state.apply(temperateSummer());
         state.apply(new StormDeltaPayload(snapshot(5, 30.0D, 40.0D, 0.0F, 0.0F, 0.456F, 600, 2400)));
         List<String> lines = WeatherDebugOverlay.buildLines(state, 0.0D, 0.0D, 1.0F);
 
-        assertEquals(5, lines.size());
+        assertEquals(6, lines.size());
         assertEquals("Wind: 215 deg at 3.3 b/s", lines.get(1), "no gust is mentioned while none blows");
         assertEquals("Climate: T 0.80 H 0.40 rain, season summer 42%", lines.get(2));
-        assertEquals("Storms: 1", lines.get(3));
-        assertEquals("#5 placeholder  50 m  46%  30/120 s  synced 0s ago", lines.get(4));
+        assertEquals(LOCAL_NONE, lines.get(3), "the short overload reports no local weather");
+        assertEquals("Storms: 1", lines.get(4));
+        assertEquals("#5 placeholder  50 m  46%  30/120 s  synced 0s ago", lines.get(5));
+    }
+
+    @Test
+    void overlayLinesWithLocalWeatherPutTheLocalLineAfterTheClimate() {
+        ClientWeatherState state = new ClientWeatherState();
+        state.apply(new WindUpdatePayload(90.0F, 12.0F));
+        state.apply(new ClimateUpdatePayload(0.15F, 0.6F, PrecipitationKind.SLEET, "early_spring", 0.1F));
+        state.apply(new StormDeltaPayload(snapshot(7, 0.0D, 20.0D, 0.0F, 0.0F, 1.0F, 1200, 2400)));
+        LocalConditions sleet = new LocalConditions(0.8F, 0.0F, 0.4F, PrecipitationKind.SLEET, 1.0F, 7);
+
+        List<String> lines = WeatherDebugOverlay.buildLines(state, 0.0D, 0.0D, 1.0F, sleet, 0.5F, 0.1F, 0.2F,
+            true, false);
+
+        assertEquals(List.of(WeatherDebugOverlay.HEADER,
+            "Wind: 90 deg at 12.0 b/s",
+            "Climate: T 0.15 H 0.60 sleet, season early_spring 10%",
+            "Local: rain 0.50 thunder 0.10 haze 0.20 sleet | renderer weathermod | shaders off",
+            "Storms: 1",
+            "#7 placeholder  20 m  100%  60/120 s  synced 0s ago"), lines);
+    }
+
+    @Test
+    void overlayLocalLineShowsDrivenLevelsKindRendererAndShaders() {
+        assertEquals(LOCAL_NONE, WeatherDebugOverlay.formatLocal(LocalConditions.NONE, 0.0F, 0.0F, 0.0F, false,
+            false));
+
+        LocalConditions rain = new LocalConditions(1.0F, 0.5F, 0.0F, PrecipitationKind.RAIN, 1.0F, 3);
+        assertEquals("Local: rain 0.35 thunder 0.12 haze 0.00 rain | renderer weathermod | shaders on",
+            WeatherDebugOverlay.formatLocal(rain, 0.35F, 0.12F, 0.0F, true, true),
+            "the driven levels, not the raw conditions, are printed while they ramp");
+
+        LocalConditions snow = new LocalConditions(1.0F, 0.0F, 0.25F, PrecipitationKind.SNOW, 0.7F, 4);
+        assertEquals("Local: rain 1.00 thunder 0.00 haze 0.25 snow | renderer vanilla | shaders on",
+            WeatherDebugOverlay.formatLocal(snow, 1.0F, 0.0F, 0.25F, false, true));
+
+        LocalConditions fog = new LocalConditions(0.0F, 0.0F, 0.8F, PrecipitationKind.NONE, 1.0F, -1);
+        assertEquals("Local: rain 0.00 thunder 0.00 haze 0.80 none | renderer weathermod | shaders off",
+            WeatherDebugOverlay.formatLocal(fog, 0.0F, 0.0F, 0.8F, true, false));
     }
 
     @Test

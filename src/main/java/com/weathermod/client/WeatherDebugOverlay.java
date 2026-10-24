@@ -1,6 +1,9 @@
 package com.weathermod.client;
 
 import com.weathermod.WeatherMod;
+import com.weathermod.client.render.PrecipitationRenderer;
+import com.weathermod.client.render.WeatherLevelDriver;
+import com.weathermod.compat.iris.IrisCompat;
 import com.weathermod.config.ClientConfig;
 import java.util.ArrayList;
 import java.util.List;
@@ -10,6 +13,7 @@ import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
@@ -18,9 +22,10 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterGuiLayersEvent;
 
 /**
- * Top-left text overlay listing the wind, the climate at the player and every storm the client knows. It is drawn
- * as a GUI layer above all vanilla layers whenever the client config enables it or it has been toggled on at
- * runtime through the key mapping or {@code /weathermodc overlay}.
+ * Top-left text overlay listing the wind, the climate at the player, the local weather the client is showing (driven
+ * levels, kind, which renderer draws the rain, whether a shader pack is active) and every storm the client knows. It
+ * is drawn as a GUI layer above all vanilla layers whenever the client config enables it or it has been toggled on
+ * at runtime through the key mapping or {@code /weathermodc overlay}.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID, value = Dist.CLIENT)
 public final class WeatherDebugOverlay {
@@ -38,6 +43,10 @@ public final class WeatherDebugOverlay {
     public static final String WIND_UNKNOWN = "Wind: waiting for server";
     /** Climate line shown until the first climate update has arrived. */
     public static final String CLIMATE_UNKNOWN = "Climate: waiting for server";
+    /** Renderer label on the local line while the mod's precipitation renderer draws the rain. */
+    public static final String RENDERER_WEATHERMOD = "weathermod";
+    /** Renderer label on the local line while vanilla draws the rain. */
+    public static final String RENDERER_VANILLA = "vanilla";
 
     private static volatile boolean toggled;
 
@@ -82,12 +91,16 @@ public final class WeatherDebugOverlay {
         }
         Minecraft minecraft = Minecraft.getInstance();
         LocalPlayer player = minecraft.player;
-        if (player == null || minecraft.level == null || minecraft.options.hideGui
+        ClientLevel level = minecraft.level;
+        if (player == null || level == null || minecraft.options.hideGui
             || minecraft.getDebugOverlay().showDebugScreen()) {
             return;
         }
         float partialTick = deltaTracker.getGameTimeDeltaPartialTick(false);
-        List<String> lines = buildLines(ClientWeatherState.INSTANCE, player.getX(), player.getZ(), partialTick);
+        WeatherLevelDriver driver = WeatherLevelDriver.INSTANCE;
+        List<String> lines = buildLines(ClientWeatherState.INSTANCE, player.getX(), player.getZ(), partialTick,
+            LocalWeather.INSTANCE.conditions(), driver.rain(partialTick), driver.thunder(partialTick),
+            driver.haze(partialTick), PrecipitationRenderer.isActive(level), IrisCompat.isShaderPackInUse());
         Font font = minecraft.font;
         int y = MARGIN;
         for (String line : lines) {
@@ -97,15 +110,39 @@ public final class WeatherDebugOverlay {
     }
 
     /**
-     * Builds the overlay text for a viewer at the given horizontal position: the header, the wind, the climate, the
-     * storm count and one line per storm with id, type, distance, intensity, age and time since the last sync.
+     * Builds the overlay text for a viewer at the given horizontal position without any local weather: the header,
+     * the wind, the climate, a local line reporting no weather, the storm count and one line per storm. Equivalent to
+     * the full overload with {@link LocalConditions#NONE}, zero levels, vanilla rendering and no shader pack.
      */
     public static List<String> buildLines(ClientWeatherState state, double viewerX, double viewerZ,
                                           float partialTick) {
-        List<String> lines = new ArrayList<>(4 + state.stormCount());
+        return buildLines(state, viewerX, viewerZ, partialTick, LocalConditions.NONE, 0.0F, 0.0F, 0.0F, false, false);
+    }
+
+    /**
+     * Builds the overlay text for a viewer at the given horizontal position: the header, the wind, the climate, the
+     * local weather line, the storm count and one line per storm with id, type, distance, intensity, age and time
+     * since the last sync.
+     *
+     * @param state          the client weather state
+     * @param viewerX        viewer x, for the storm distances
+     * @param viewerZ        viewer z, for the storm distances
+     * @param partialTick    the frame's partial tick, for the storm positions and intensities
+     * @param conditions     the local conditions computed this tick
+     * @param rain           the driven rain level
+     * @param thunder        the driven thunder level
+     * @param haze           the driven haze level
+     * @param rendererActive whether the mod's precipitation renderer draws the rain in this level
+     * @param shaderPack     whether a shader pack is in use
+     */
+    public static List<String> buildLines(ClientWeatherState state, double viewerX, double viewerZ,
+                                          float partialTick, LocalConditions conditions, float rain,
+                                          float thunder, float haze, boolean rendererActive, boolean shaderPack) {
+        List<String> lines = new ArrayList<>(5 + state.stormCount());
         lines.add(HEADER);
         lines.add(formatWind(state));
         lines.add(formatClimate(state));
+        lines.add(formatLocal(conditions, rain, thunder, haze, rendererActive, shaderPack));
         lines.add("Storms: " + state.stormCount());
         for (ClientStorm storm : state.storms()) {
             lines.add(formatStorm(storm, viewerX, viewerZ, partialTick));
@@ -144,6 +181,18 @@ public final class WeatherDebugOverlay {
             : "no season";
         return String.format(Locale.ROOT, "Climate: T %.2f H %.2f %s, %s", state.temperature(), state.humidity(),
             kind, season);
+    }
+
+    /**
+     * One line describing the weather the client shows at the camera: the driven rain, thunder and haze levels, the
+     * kind that falls (lower-cased), whether the mod's renderer or vanilla draws the rain and whether a shader pack
+     * is in use.
+     */
+    public static String formatLocal(LocalConditions conditions, float rain, float thunder, float haze,
+                                     boolean rendererActive, boolean shaderPack) {
+        return String.format(Locale.ROOT, "Local: rain %.2f thunder %.2f haze %.2f %s | renderer %s | shaders %s",
+            rain, thunder, haze, conditions.kind().name().toLowerCase(Locale.ROOT),
+            rendererActive ? RENDERER_WEATHERMOD : RENDERER_VANILLA, shaderPack ? "on" : "off");
     }
 
     /** One line describing a storm as seen from the given horizontal position. */

@@ -16,17 +16,21 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
 
 /**
  * The client's view of the weather in its current dimension: every storm the server has sent, the latest wind and
  * the latest climate at the player. Payload handlers feed it on the main thread, the client tick ages and moves
- * the storms between updates and drops the ones the server has stopped updating, and logging out clears
- * everything. Game-bus events only touch {@link #INSTANCE}; tests build their own instances.
+ * the storms between updates and drops the ones the server has stopped updating, and leaving the level (logging
+ * out, a dimension change or a reconfiguration) clears everything, since the server sends the new dimension's full
+ * state right after the respawn and a stale climate must not count as the mod being active there. Game-bus events
+ * only touch {@link #INSTANCE}; tests build their own instances.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID, value = Dist.CLIENT)
 public final class ClientWeatherState {
@@ -68,6 +72,14 @@ public final class ClientWeatherState {
     @SubscribeEvent
     public static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         INSTANCE.clear();
+    }
+
+    /** The client level is replaced on a dimension change and nulled on a reconfiguration without a logout. */
+    @SubscribeEvent
+    public static void onLevelUnload(LevelEvent.Unload event) {
+        if (event.getLevel() instanceof ClientLevel) {
+            INSTANCE.clear();
+        }
     }
 
     /**
@@ -171,7 +183,10 @@ public final class ClientWeatherState {
         return storms.remove(id) != null;
     }
 
-    /** Forgets every storm, the wind and the climate, as happens when the client leaves a world. */
+    /**
+     * Forgets every storm, the wind and the climate, as happens when the client leaves a world or its level is
+     * replaced.
+     */
     public void clear() {
         storms.clear();
         forgetWind();
