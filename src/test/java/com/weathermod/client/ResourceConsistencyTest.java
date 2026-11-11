@@ -10,6 +10,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.weathermod.client.particle.EmitterMath;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -19,13 +21,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
 /**
  * Checks that the generated client assets agree with each other and with the code that loads them: every particle
- * definition lists sprites that exist, every sound event in sounds.json has its OGG file, and the textures have the
- * sizes the renderer and the particles expect. Reads the files from the classpath and decodes the PNG headers
- * itself, so it needs no Minecraft bootstrap.
+ * definition lists sprites that exist, every sound event in sounds.json has its OGG file, the textures have the
+ * sizes the renderer and the particles expect, and the particle sprites carry the alpha their render types assume.
+ * Reads the files from the classpath, decodes the PNG headers itself and the sprite pixels with the JDK's image
+ * reader, so it needs no Minecraft bootstrap.
  */
 class ResourceConsistencyTest {
     private static final String ASSETS = "/assets/weathermod/";
@@ -33,13 +37,23 @@ class ResourceConsistencyTest {
     private static final List<String> SOUND_KEYS = List.of(
         "ambient.rain_light", "ambient.rain_heavy", "ambient.rain_roof", "ambient.snow", "ambient.wind");
     private static final List<String> HAZE_SPRITES = List.of("haze_0", "haze_1", "haze_2", "haze_3");
-    private static final List<String> DUST_SPRITES = List.of("wind_dust_0", "wind_dust_1");
+    private static final List<String> DUST_SPRITES =
+        List.of("wind_dust_0", "wind_dust_1", "wind_dust_2", "wind_dust_3");
     private static final List<String> LEAF_SPRITES = List.of("wind_leaf_0", "wind_leaf_1");
     private static final Map<String, List<String>> PARTICLE_SPRITES = Map.of(
         "haze", HAZE_SPRITES, "wind_dust", DUST_SPRITES, "wind_leaf", LEAF_SPRITES);
     private static final int ENVIRONMENT_SIZE = 64;
     private static final int HAZE_SIZE = 32;
     private static final int SMALL_SIZE = 8;
+    /** Fewest solid texels of a dust sprite, as the generator guarantees: enough to read as a puff. */
+    private static final int DUST_MIN_SOLID = 22;
+    /** Most solid texels of a dust sprite, as the generator guarantees: still speckled, not a square. */
+    private static final int DUST_MAX_SOLID = 32;
+    /** Fewest solid texels of a leaf sprite, as the generator guarantees. */
+    private static final int LEAF_MIN_SOLID = 24;
+    private static final int OPAQUE = 255;
+    /** The haze sprites are sampled off-centre and wobbled by noise, so their peak may fall this far short. */
+    private static final int HAZE_PEAK_SLACK = 8;
     private static final int RGBA_COLOR_TYPE = 6;
     private static final int PNG_HEADER_LENGTH = 33;
     private static final byte[] PNG_SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
@@ -86,6 +100,38 @@ class ResourceConsistencyTest {
     }
 
     @Test
+    void dustAndLeafSpritesAreGreyWithHardAlphaAndSolidEnoughToBeSeen() throws IOException {
+        // Both are drawn on the opaque particle sheet, which does not blend: a soft edge would show as a solid one.
+        for (String name : DUST_SPRITES) {
+            int solid = assertHardAlphaGrey(ASSETS + "textures/particle/" + name + ".png");
+            assertTrue(solid >= DUST_MIN_SOLID && solid <= DUST_MAX_SOLID,
+                name + " has " + solid + " solid texels, outside " + DUST_MIN_SOLID + ".." + DUST_MAX_SOLID);
+        }
+        for (String name : LEAF_SPRITES) {
+            int solid = assertHardAlphaGrey(ASSETS + "textures/particle/" + name + ".png");
+            assertTrue(solid >= LEAF_MIN_SOLID, name + " has only " + solid + " solid texels");
+        }
+    }
+
+    @Test
+    void hazeSpritesPeakAtTheAlphaTheParticleAssumes() throws IOException {
+        int expectedPeak = Math.round(EmitterMath.HAZE_SPRITE_CENTRE_ALPHA * OPAQUE);
+        for (String name : HAZE_SPRITES) {
+            String path = ASSETS + "textures/particle/" + name + ".png";
+            BufferedImage image = readImage(path);
+            int peak = 0;
+            for (int y = 0; y < image.getHeight(); y++) {
+                for (int x = 0; x < image.getWidth(); x++) {
+                    peak = Math.max(peak, image.getRGB(x, y) >>> 24);
+                }
+            }
+            assertTrue(peak <= expectedPeak, path + " peaks at alpha " + peak + ", above " + expectedPeak);
+            assertTrue(peak >= expectedPeak - HAZE_PEAK_SLACK, path + " peaks at only " + peak);
+            assertEquals(0, image.getRGB(0, 0) >>> 24, path + " must fade to nothing at its corner");
+        }
+    }
+
+    @Test
     void environmentTexturesExistAndAre64Square() throws IOException {
         assertPng(ASSETS + "textures/environment/rain.png", ENVIRONMENT_SIZE);
         assertPng(ASSETS + "textures/environment/snow.png", ENVIRONMENT_SIZE);
@@ -128,6 +174,38 @@ class ResourceConsistencyTest {
         assertEquals(size, header.height(), path + " height");
         assertEquals(8, header.bitDepth(), path + " bit depth");
         assertEquals(RGBA_COLOR_TYPE, header.colorType(), path + " must be RGBA");
+    }
+
+    /**
+     * Asserts that every texel of a sprite is either fully transparent or fully opaque and grey.
+     *
+     * @return the number of opaque texels
+     */
+    private static int assertHardAlphaGrey(String path) throws IOException {
+        BufferedImage image = readImage(path);
+        int solid = 0;
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                int argb = image.getRGB(x, y);
+                int alpha = argb >>> 24;
+                assertTrue(alpha == 0 || alpha == OPAQUE, path + " has a soft texel at " + x + "," + y + ": " + alpha);
+                if (alpha == OPAQUE) {
+                    int red = argb >> 16 & 0xFF;
+                    assertTrue(red == (argb >> 8 & 0xFF) && red == (argb & 0xFF),
+                        path + " has a coloured texel at " + x + "," + y + ", the tint would not apply evenly");
+                    solid++;
+                }
+            }
+        }
+        return solid;
+    }
+
+    private static BufferedImage readImage(String path) throws IOException {
+        try (InputStream stream = open(path)) {
+            BufferedImage image = ImageIO.read(stream);
+            assertNotNull(image, path + " could not be decoded");
+            return image;
+        }
     }
 
     private static PngHeader readPngHeader(String path) throws IOException {
