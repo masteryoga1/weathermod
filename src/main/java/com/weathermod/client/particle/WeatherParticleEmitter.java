@@ -5,13 +5,13 @@ import com.weathermod.client.ClientWeatherState;
 import com.weathermod.client.LocalWeather;
 import com.weathermod.client.render.WeatherLevelDriver;
 import com.weathermod.config.ClientConfig;
+import com.weathermod.core.Headings;
 import com.weathermod.core.WeatherParticles;
 import java.util.Objects;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
-import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.state.BlockState;
@@ -24,26 +24,29 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 
 /**
  * Spawns the weather particles around the camera once per client tick, after the local weather and the level driver
- * have updated: haze puffs scaled by the driven haze level, dust and leaves scaled by the wind. It only reads client
- * state and adds particles to the client level, which honours the player's particle setting; it never touches the
- * world. Game-bus events only touch {@link #INSTANCE}.
+ * have updated: haze puffs scaled by the driven haze level, dust kicked up from open ground and leaves torn off the
+ * canopy, both scaled by the wind. Every count is bounded by the constants in {@link EmitterMath} and every spawn
+ * point lies inside the 32-block distance the vanilla particle path accepts. It only reads client state and adds
+ * particles to the client level, which honours the player's particle setting; it never touches the world. Game-bus
+ * events only touch {@link #INSTANCE}.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID, value = Dist.CLIENT)
 public final class WeatherParticleEmitter {
     /** Upward velocity of a haze puff in blocks per tick. */
     public static final double HAZE_RISE = 0.002D;
-    /** Lowest height above the heightmap a dust speck appears at. */
-    public static final double DUST_MIN_HEIGHT = 0.1D;
-    /** Height band above {@link #DUST_MIN_HEIGHT} a dust speck appears in. */
-    public static final double DUST_HEIGHT_RANGE = 1.1D;
-    /** Leaf tries reach this far below the camera. */
-    public static final int LEAF_BELOW_CAMERA = 8;
-    /** Leaf tries reach this far above the camera. */
-    public static final int LEAF_ABOVE_CAMERA = 12;
-    /** Initial downward velocity of a leaf in blocks per tick. */
+    /**
+     * Lowest height above the heightmap a dust puff appears at; a puff is drawn around its position, so any lower
+     * and the ground would hide half of it.
+     */
+    public static final double DUST_MIN_HEIGHT = 0.25D;
+    /** Height band above {@link #DUST_MIN_HEIGHT} a dust puff appears in; its top stays below eye height. */
+    public static final double DUST_HEIGHT_RANGE = 1.25D;
+    /** Initial downward velocity, in blocks per tick, of a leaf that drops from the underside of a canopy. */
     public static final double LEAF_FALL_SPEED = -0.02D;
-    /** How far below the bottom of its leaf block a leaf appears. */
-    public static final double LEAF_DROP = 0.1D;
+    /** Smallest upward velocity, in blocks per tick, of a leaf the wind lifts off the top of a canopy. */
+    public static final double LEAF_KICK_MIN = 0.04D;
+    /** Largest upward velocity, in blocks per tick, of a leaf the wind lifts off the top of a canopy. */
+    public static final double LEAF_KICK_MAX = 0.10D;
     /** Value of {@code ClientConfig.hazeParticles} assumed while the client config has not been loaded. */
     public static final boolean DEFAULT_HAZE_PARTICLES = true;
     /** Value of {@code ClientConfig.windParticles} assumed while the client config has not been loaded. */
@@ -95,7 +98,10 @@ public final class WeatherParticleEmitter {
 
     /**
      * Spawns this tick's particles around a camera position: haze when the config allows it, dust and leaves when the
-     * config allows them and a wind is known. A density of zero spawns nothing.
+     * config allows them and a wind is known. A density of zero spawns nothing. At most
+     * {@code ceil(EmitterMath.HAZE_PER_TICK * hazeStrength * density)} puffs of haze,
+     * {@code ceil(EmitterMath.DUST_PER_TICK * density)} puffs of dust and
+     * {@code ceil(EmitterMath.LEAF_PER_TICK * density)} leaves are added per tick.
      *
      * @param level the level to add particles to
      * @param camX  camera x
@@ -115,7 +121,7 @@ public final class WeatherParticleEmitter {
             emitHaze(level, camX, camY, camZ, wind, haze, density);
         }
         if (isWindEnabledByConfig() && wind.hasWind()) {
-            emitDust(level, camX, camZ, wind, density);
+            emitDust(level, camX, camY, camZ, wind, density);
             emitLeaves(level, camX, camY, camZ, wind, density);
         }
     }
@@ -152,7 +158,8 @@ public final class WeatherParticleEmitter {
         }
     }
 
-    private void emitDust(ClientLevel level, double camX, double camZ, ClientWeatherState wind, double density) {
+    private void emitDust(ClientLevel level, double camX, double camY, double camZ, ClientWeatherState wind,
+                          double density) {
         float windSpeed = wind.windSpeed();
         float gustSpeed = wind.windGustSpeed();
         int count = EmitterMath.stochasticCount(EmitterMath.dustExpected(windSpeed, gustSpeed, density), random);
@@ -173,50 +180,60 @@ public final class WeatherParticleEmitter {
             if (ground <= minBuildHeight) {
                 continue;
             }
+            double y = ground + DUST_MIN_HEIGHT + random.nextDouble() * DUST_HEIGHT_RANGE;
+            if (Math.abs(y - camY) > EmitterMath.DUST_VERTICAL_REACH) {
+                continue;
+            }
             cursor.set(blockX, ground - 1, blockZ);
             BlockState surface = level.getBlockState(cursor);
-            if (surface.is(BlockTags.LEAVES) || surface.getFluidState().is(FluidTags.WATER)) {
+            if (surface.is(BlockTags.LEAVES) || !surface.getFluidState().isEmpty()) {
                 continue;
             }
             cursor.set(blockX, ground, blockZ);
             if (!level.canSeeSky(cursor)) {
                 continue;
             }
-            double y = ground + DUST_MIN_HEIGHT + random.nextDouble() * DUST_HEIGHT_RANGE;
             level.addParticle(WeatherParticles.WIND_DUST.get(), x, y, z, velocity[0], 0.0D, velocity[1]);
         }
     }
 
+    /**
+     * Tears leaves off the canopy around the camera, at the places {@link CanopyMath#shedLeaves} finds. A leaf off
+     * the top face of the canopy is kicked upward so it sails over the trees, one off the underside starts falling;
+     * both start at the wind's carrying velocity. The wind carries a top leaf away several times faster than the
+     * kick lifts it, so leaves that reach down to the ground (a hedge, a pile of leaf blocks), which can only shed
+     * off the top, hide their leaves from a viewer who stands close by on the upwind side; from the side and from
+     * downwind the same leaves are in plain view.
+     */
     private void emitLeaves(ClientLevel level, double camX, double camY, double camZ, ClientWeatherState wind,
                             double density) {
         float windSpeed = wind.windSpeed();
-        if (windSpeed <= EmitterMath.LEAF_MIN_WIND) {
+        float gustSpeed = wind.windGustSpeed();
+        int wanted = EmitterMath.stochasticCount(EmitterMath.leafExpected(windSpeed, gustSpeed, density), random);
+        if (wanted <= 0) {
             return;
         }
-        float chance = EmitterMath.leafChance(windSpeed, density);
-        if (chance <= 0.0F) {
-            return;
+        float direction = wind.windDirectionDegrees();
+        double[] velocity = EmitterMath.windVelocity(direction, Math.max(windSpeed, gustSpeed),
+            EmitterMath.LEAF_DRIFT);
+        CanopyMath.shedLeaves(random,
+            (blockX, blockZ) -> level.getHeight(Heightmap.Types.MOTION_BLOCKING, blockX, blockZ),
+            (blockX, blockY, blockZ) -> kindAt(level, blockX, blockY, blockZ),
+            camX, camY, camZ, Headings.directionX(direction), Headings.directionZ(direction), wanted,
+            (x, y, z, fromTop) -> {
+                double rise = fromTop
+                    ? LEAF_KICK_MIN + random.nextDouble() * (LEAF_KICK_MAX - LEAF_KICK_MIN)
+                    : LEAF_FALL_SPEED;
+                level.addParticle(WeatherParticles.WIND_LEAF.get(), x, y, z, velocity[0], rise, velocity[1]);
+            });
+    }
+
+    /** What the canopy rules see at a position: air, a leaf block or anything else. */
+    private CanopyMath.BlockKind kindAt(ClientLevel level, int blockX, int blockY, int blockZ) {
+        BlockState state = level.getBlockState(cursor.set(blockX, blockY, blockZ));
+        if (state.isAir()) {
+            return CanopyMath.BlockKind.AIR;
         }
-        double[] velocity = EmitterMath.windVelocity(wind.windDirectionDegrees(), windSpeed, EmitterMath.LEAF_DRIFT);
-        int cameraY = Mth.floor(camY);
-        int verticalSpan = LEAF_BELOW_CAMERA + LEAF_ABOVE_CAMERA + 1;
-        for (int i = 0; i < EmitterMath.LEAF_TRIES; i++) {
-            int blockX = Mth.floor(camX + (random.nextDouble() * 2.0D - 1.0D) * EmitterMath.LEAF_DISTANCE);
-            int blockZ = Mth.floor(camZ + (random.nextDouble() * 2.0D - 1.0D) * EmitterMath.LEAF_DISTANCE);
-            int blockY = cameraY - LEAF_BELOW_CAMERA + random.nextInt(verticalSpan);
-            cursor.set(blockX, blockY, blockZ);
-            if (!level.getBlockState(cursor).is(BlockTags.LEAVES)) {
-                continue;
-            }
-            cursor.set(blockX, blockY - 1, blockZ);
-            if (!level.getBlockState(cursor).isAir()) {
-                continue;
-            }
-            if (random.nextFloat() >= chance) {
-                continue;
-            }
-            level.addParticle(WeatherParticles.WIND_LEAF.get(), blockX + 0.5D, blockY - LEAF_DROP, blockZ + 0.5D,
-                velocity[0], LEAF_FALL_SPEED, velocity[1]);
-        }
+        return state.is(BlockTags.LEAVES) ? CanopyMath.BlockKind.LEAVES : CanopyMath.BlockKind.OTHER;
     }
 }

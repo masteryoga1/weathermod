@@ -41,9 +41,9 @@ fails if a loop is not exactly 10.0 s of mono 44100 Hz Vorbis.
 | --- | --- | --- |
 | `textures/environment/rain.png` | 64x64 | 7-9 thin vertical streaks, 1-2 px wide and 18-48 px long, pale blue-white, soft ends, tiling vertically |
 | `textures/environment/snow.png` | 64x64 | 10-14 soft round flakes 2-4 px across, white, tiling vertically |
-| `textures/particle/haze_0.png` .. `haze_3.png` | 32x32 | a white radial puff, alpha 0.9 at the centre falling to 0 at the edge, outline wobbled by low-frequency noise |
-| `textures/particle/wind_dust_0.png`, `wind_dust_1.png` | 8x8 | 2-3 irregular white specks with solid cores and one-pixel soft edges |
-| `textures/particle/wind_leaf_0.png`, `wind_leaf_1.png` | 8x8 | a grey leaf silhouette with a darker midrib; the particle tints it with the foliage colour |
+| `textures/particle/haze_0.png` .. `haze_3.png` | 32x32 | a white radial puff, alpha 0.6 at the centre falling to 0 at the edge, outline wobbled by low-frequency noise; the particle's vertex alpha carries the rest of the opacity |
+| `textures/particle/wind_dust_0.png` .. `wind_dust_3.png` | 8x8 | a speckled puff of dust: a solid core thinning to scattered grains, 22-32 solid texels, alpha all or nothing, greys 255 and 205; the particle tints it against the ground |
+| `textures/particle/wind_leaf_0.png`, `wind_leaf_1.png` | 8x8 | a grey leaf that fills the sprite (at least 24 solid texels), alpha all or nothing, body 240 with a darker rim (190) and midrib (140); the particle tints it with the colour of its leaf block |
 | `particles/haze.json`, `wind_dust.json`, `wind_leaf.json` | | vanilla particle definitions listing the sprites above |
 
 `generate_sounds.py` (OGG Vorbis, mono, 44100 Hz, quality 4, 10.0 s, seamless loop, peak -6 dBFS):
@@ -72,5 +72,7 @@ harmless: the committed files are the ones that ship.
 
 `src/test/java/com/weathermod/client/ResourceConsistencyTest.java` reads the generated files from the classpath
 and checks that every particle definition lists textures that exist, every entry in `sounds.json` has its OGG
-file, the five expected sound events are present and the PNGs have the sizes the code expects. It runs with the
-rest of the unit tests (`./gradlew test`).
+file, the five expected sound events are present and the PNGs have the sizes the code expects. It also decodes
+the particle sprites: the dust and leaf sprites, which are drawn without blending, must be all-or-nothing in
+alpha and solid enough to be seen, and the haze sprites must peak at the centre alpha the haze particle assumes.
+It runs with the rest of the unit tests (`./gradlew test`).

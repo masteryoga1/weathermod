@@ -1,6 +1,8 @@
 {
   "textures": [
     "weathermod:wind_dust_0",
-    "weathermod:wind_dust_1"
+    "weathermod:wind_dust_1",
+    "weathermod:wind_dust_2",
+    "weathermod:wind_dust_3"
   ]
 }

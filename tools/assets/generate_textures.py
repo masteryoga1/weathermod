@@ -10,9 +10,11 @@ Outputs:
 
 * ``textures/environment/rain.png`` 64x64: thin vertical streaks for the precipitation renderer, tiling vertically.
 * ``textures/environment/snow.png`` 64x64: soft round flakes, tiling vertically.
-* ``textures/particle/haze_0.png`` .. ``haze_3.png`` 32x32: soft radial puffs broken up by low-frequency noise.
-* ``textures/particle/wind_dust_0.png``, ``wind_dust_1.png`` 8x8: a few irregular specks.
-* ``textures/particle/wind_leaf_0.png``, ``wind_leaf_1.png`` 8x8: a grey leaf silhouette the foliage colour tints.
+* ``textures/particle/haze_0.png`` .. ``haze_3.png`` 32x32: soft radial puffs broken up by low-frequency noise,
+  alpha 0.6 at the centre (the particle's vertex alpha carries the rest of the opacity).
+* ``textures/particle/wind_dust_0.png`` .. ``wind_dust_3.png`` 8x8: speckled puffs of dust, hard alpha, two greys.
+* ``textures/particle/wind_leaf_0.png``, ``wind_leaf_1.png`` 8x8: a grey leaf that fills the sprite, with a darker
+  rim and midrib; the particle tints it with the colour of the leaf block it came off.
 * ``particles/haze.json``, ``particles/wind_dust.json``, ``particles/wind_leaf.json``.
 
 Requires Python 3, numpy and Pillow.
@@ -40,8 +42,27 @@ SMALL_SIZE = 8
 RAIN_COLOR = (230, 236, 245)
 SNOW_COLOR = (255, 255, 255)
 WHITE = (255, 255, 255)
-LEAF_BODY_GREY = 200
-LEAF_MIDRIB_GREY = 150
+
+# The haze particle multiplies this by its vertex alpha; EmitterMath.HAZE_SPRITE_CENTRE_ALPHA mirrors it.
+HAZE_CENTRE_ALPHA = 0.6
+
+# Dust is drawn on the opaque particle sheet, so its alpha is all or nothing and the puff gets its texture from
+# which texels are solid and from two grey levels.
+DUST_VARIANTS = 4
+DUST_CORE_RADIUS = 1.6
+DUST_EDGE_RADIUS = 4.2
+DUST_MIN_SOLID = 22
+DUST_MAX_SOLID = 32
+DUST_LIGHT_GREY = 255
+DUST_DARK_GREY = 205
+DUST_DARK_SHARE = 0.3
+
+# A light body with a darker rim and midrib: the leaf carries a light and a dark tone, so it reads against the sky
+# as well as against the canopy it came off.
+LEAF_BODY_GREY = 240
+LEAF_RIM_GREY = 190
+LEAF_MIDRIB_GREY = 140
+LEAF_MIN_SOLID = 24
 
 
 def seeded(*stream: int) -> np.random.Generator:
@@ -157,84 +178,49 @@ def snow_texture(rng: np.random.Generator) -> np.ndarray:
 
 
 def haze_texture(rng: np.random.Generator) -> np.ndarray:
-    """A soft radial blob, alpha 0.9 at the centre and 0 at the edge, with its outline wobbled by low-frequency noise."""
+    """A soft radial blob, ``HAZE_CENTRE_ALPHA`` at the centre and 0 at the edge, outline wobbled by slow noise."""
     size = HAZE_SIZE
     yy, xx = (np.mgrid[0:size, 0:size] + 0.5) / size * 2.0 - 1.0
     radius = np.hypot(xx, yy)
     outline = value_noise(rng, size, 3) - 0.5
     body = value_noise(rng, size, 5) - 0.5
     wobbled = np.clip(radius * (1.0 + 0.45 * outline) + 0.12 * body * radius, 0.0, 1.0)
-    alpha = 0.9 * (0.5 + 0.5 * np.cos(np.pi * wobbled))
+    alpha = HAZE_CENTRE_ALPHA * (0.5 + 0.5 * np.cos(np.pi * wobbled))
     alpha *= 1.0 - 0.35 * radius * (0.5 - body)
     alpha *= np.clip((1.0 - radius) / 0.08, 0.0, 1.0)
-    return np.clip(alpha, 0.0, 0.9)
+    return np.clip(alpha, 0.0, HAZE_CENTRE_ALPHA)
 
 
-def dust_texture(rng: np.random.Generator) -> np.ndarray:
-    """2-3 irregular specks: one or two solid pixels each, ringed by a one-pixel soft edge, never overlapping."""
+def dust_texture(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """A speckled puff: a solid core thinning to scattered grains at the rim, hard alpha, two grey levels."""
     size = SMALL_SIZE
-    alpha = np.zeros((size, size))
-    footprint = np.zeros((size, size), dtype=bool)
-    wanted = int(rng.integers(2, 4))
-    placed = 0
-    attempts = 0
-    while placed < wanted and attempts < 2_000:
-        attempts += 1
-        shape = int(rng.integers(0, 4))
-        y, x = (int(v) for v in rng.integers(1, 7, size=2))
-        core = {(y, x)}
-        if shape == 1:
-            core.add((y, x + 1))
-        elif shape == 2:
-            core.add((y + 1, x))
-        elif shape == 3:
-            core.add((y + 1, x + 1))
-        if any(not (1 <= cy <= 6 and 1 <= cx <= 6) for cy, cx in core):
-            continue
-        orthogonal = set()
-        diagonal = set()
-        for cy, cx in core:
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    cell = (cy + dy, cx + dx)
-                    if cell in core:
-                        continue
-                    if dy == 0 or dx == 0:
-                        orthogonal.add(cell)
-                    else:
-                        diagonal.add(cell)
-        diagonal -= orthogonal
-        cells = core | orthogonal | diagonal
-        if any(footprint[c] for c in cells):
-            continue
-        for cell in core:
-            alpha[cell] = 1.0
-        for cell in orthogonal:
-            alpha[cell] = float(rng.uniform(0.4, 0.6))
-        for cell in diagonal:
-            alpha[cell] = float(rng.uniform(0.15, 0.35))
-        for cell in cells:
-            footprint[cell] = True
-        placed += 1
-    if placed < 2:
-        raise RuntimeError(f"could only place {placed} dust specks")
-    return alpha
+    yy, xx = np.mgrid[0:size, 0:size] + 0.5
+    for _ in range(2_000):
+        cx, cy = (float(v) for v in rng.uniform(3.6, 4.4, size=2))
+        distance = np.hypot(xx - cx, yy - cy)
+        chance = np.clip((DUST_EDGE_RADIUS - distance) / (DUST_EDGE_RADIUS - DUST_CORE_RADIUS), 0.0, 1.0)
+        solid = rng.random((size, size)) < chance
+        if DUST_MIN_SOLID <= int(solid.sum()) <= DUST_MAX_SOLID:
+            dark = rng.random((size, size)) < DUST_DARK_SHARE
+            grey = np.where(dark, float(DUST_DARK_GREY), float(DUST_LIGHT_GREY))
+            return grey, solid.astype(float)
+    raise RuntimeError("could not draw a dust puff with the wanted coverage")
 
 
 def leaf_texture(rng: np.random.Generator, diagonal: bool) -> tuple[np.ndarray, np.ndarray]:
-    """A leaf silhouette: an elliptic base tapering to a point, with a one-pixel darker midrib; hard alpha edge."""
+    """A leaf that fills the sprite: an elliptic base tapering to a point, a darker rim and midrib; hard alpha edge."""
     size = SMALL_SIZE
     supersample = 16
     coords = (np.arange(size * supersample) + 0.5) / supersample
     yy, xx = np.meshgrid(coords, coords, indexing="ij")
     if diagonal:
-        base = np.array([1.5, 6.5])
-        tip = np.array([6.5, 1.5])
-        half_width = float(rng.uniform(1.55, 1.75))
+        base = np.array([0.8, 7.2])
+        tip = np.array([7.2, 0.8])
+        half_width = float(rng.uniform(2.1, 2.3))
     else:
-        base = np.array([4.5, 7.0])
-        tip = np.array([4.5, 1.0])
-        half_width = float(rng.uniform(1.6, 1.85))
+        base = np.array([4.5, 7.9])
+        tip = np.array([4.5, 0.1])
+        half_width = float(rng.uniform(2.45, 2.6))
     widest = float(rng.uniform(0.36, 0.44))
     taper = float(rng.uniform(1.4, 1.8))
     axis = tip - base
@@ -252,13 +238,16 @@ def leaf_texture(rng: np.random.Generator, diagonal: bool) -> tuple[np.ndarray, 
     def coverage(mask: np.ndarray) -> np.ndarray:
         return mask.reshape(size, supersample, size, supersample).mean(axis=(1, 3))
 
-    alpha = (coverage(inside) >= 0.5).astype(float)
-    rib = (coverage(midrib) >= 0.5) & (alpha > 0.0)
+    solid = coverage(inside) >= 0.5
+    rib = (coverage(midrib) >= 0.5) & solid
+    padded = np.pad(solid, 1)
+    enclosed = padded[:-2, 1:-1] & padded[2:, 1:-1] & padded[1:-1, :-2] & padded[1:-1, 2:]
     grey = np.full((size, size), float(LEAF_BODY_GREY))
+    grey[solid & ~enclosed] = LEAF_RIM_GREY
     grey[rib] = LEAF_MIDRIB_GREY
-    if alpha.sum() < 8:
+    if solid.sum() < LEAF_MIN_SOLID:
         raise RuntimeError("leaf silhouette came out too small")
-    return grey, alpha
+    return grey, solid.astype(float)
 
 
 def write_particle_definition(path: Path, texture_names: list[str]) -> None:
@@ -288,9 +277,10 @@ def generate(out: Path) -> list[Path]:
         haze_names.append(name)
 
     dust_names = []
-    for index in range(2):
+    for index in range(DUST_VARIANTS):
         name = f"wind_dust_{index}"
-        save_rgba(particle / f"{name}.png", WHITE, dust_texture(seeded(4, index)))
+        grey, alpha = dust_texture(seeded(4, index))
+        save_rgba(particle / f"{name}.png", grey, alpha)
         written.append(particle / f"{name}.png")
         dust_names.append(name)
 

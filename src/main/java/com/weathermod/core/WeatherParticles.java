@@ -20,10 +20,10 @@ public final class WeatherParticles {
     /** A large, slow, translucent puff that shows fog and overcast as drifting shapes. */
     public static final DeferredHolder<ParticleType<?>, SimpleParticleType> HAZE =
         PARTICLE_TYPES.register("haze", () -> new SimpleParticleType(false));
-    /** A speck of dust blown along the ground by a strong wind. */
+    /** A puff of dust a strong wind kicks up from open ground, tinted against the ground it rose from. */
     public static final DeferredHolder<ParticleType<?>, SimpleParticleType> WIND_DUST =
         PARTICLE_TYPES.register("wind_dust", () -> new SimpleParticleType(false));
-    /** A leaf torn from a tree by the wind, tinted with the foliage colour where it came loose. */
+    /** A leaf the wind tears off a tree canopy, tinted like the leaf block it came off. */
     public static final DeferredHolder<ParticleType<?>, SimpleParticleType> WIND_LEAF =
         PARTICLE_TYPES.register("wind_leaf", () -> new SimpleParticleType(false));
 
