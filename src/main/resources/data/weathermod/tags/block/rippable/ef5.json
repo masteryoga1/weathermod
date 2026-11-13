@@ -1,0 +1,21 @@
+{
+  "values": [
+    "#weathermod:rippable/ef4",
+    {
+      "id": "#c:obsidians",
+      "required": false
+    },
+    {
+      "id": "#c:storage_blocks",
+      "required": false
+    },
+    {
+      "id": "#c:chains",
+      "required": false
+    },
+    "minecraft:end_stone",
+    "minecraft:end_stone_bricks",
+    "minecraft:ancient_debris",
+    "minecraft:iron_bars"
+  ]
+}

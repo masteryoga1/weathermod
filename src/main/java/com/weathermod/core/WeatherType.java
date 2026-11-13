@@ -24,7 +24,8 @@ import net.minecraft.world.level.biome.Biome;
 
 /**
  * One data-driven weather type: the family that simulates it plus the ranges, climate limits and visuals
- * that tune it. Instances are immutable and loaded from datapack JSON through {@link #CODEC}.
+ * that tune it, the family's own parameter block and the conditions under which the type forms naturally.
+ * Instances are immutable and loaded from datapack JSON through {@link #CODEC}.
  *
  * @param family          the simulation family
  * @param intensity       the range the initial intensity is picked from, 0 to 1
@@ -38,6 +39,10 @@ import net.minecraft.world.level.biome.Biome;
  * @param biomes          the biome tag the type may form in, empty meaning any biome
  * @param dimensions      the dimension ids the type may form in
  * @param enabled         whether the type is used at all
+ * @param severe          whether storms of this type count as severe weather for the director's cooldown
+ * @param convective      what a convective storm of this type does; only allowed for the convective family
+ * @param vortex          the vortex this type is; required for the vortex family and allowed for no other
+ * @param trigger         the wind, time of day and front the type needs to form naturally
  */
 public record WeatherType(
     WeatherFamily family,
@@ -51,7 +56,11 @@ public record WeatherType(
     PrecipitationMode precipitation,
     Optional<TagKey<Biome>> biomes,
     List<ResourceLocation> dimensions,
-    boolean enabled
+    boolean enabled,
+    boolean severe,
+    Optional<ConvectiveParams> convective,
+    Optional<VortexParams> vortex,
+    Trigger trigger
 ) {
     public static final Range DEFAULT_INTENSITY = new Range(0.2F, 1.0F);
     public static final Range DEFAULT_DURATION_SECONDS = new Range(300.0F, 1200.0F);
@@ -62,24 +71,35 @@ public record WeatherType(
     public static final List<ResourceLocation> DEFAULT_DIMENSIONS = List.of(
         ResourceLocation.withDefaultNamespace("overworld"),
         ResourceLocation.withDefaultNamespace("the_nether"));
+    /** Speed limit used when a type sets none, in blocks per second; equals StormInstance.MAX_STEER_SPEED. */
+    public static final float UNLIMITED_SPEED = 64.0F;
 
     /**
-     * JSON codec. Every field except {@code family} is optional and falls back to the defaults above.
-     * Keys are snake case: {@code duration_seconds}, {@code interest_radius} and so on.
+     * JSON codec. Every field except {@code family} is optional and falls back to the defaults above; defaults
+     * are omitted when encoding. Keys are snake case: {@code duration_seconds}, {@code interest_radius} and so on.
+     * The group holds 16 fields, the most the codec library allows: a further setting needs a nested record.
      */
     public static final Codec<WeatherType> CODEC = RecordCodecBuilder.<WeatherType>create(instance -> instance.group(
         WeatherFamily.CODEC.fieldOf("family").forGetter(WeatherType::family),
         Range.CODEC.optionalFieldOf("intensity", DEFAULT_INTENSITY).forGetter(WeatherType::intensity),
         Climate.CODEC.optionalFieldOf("climate", Climate.ANY).forGetter(WeatherType::climate),
-        Range.CODEC.optionalFieldOf("duration_seconds", DEFAULT_DURATION_SECONDS).forGetter(WeatherType::durationSeconds),
+        Range.CODEC.optionalFieldOf("duration_seconds", DEFAULT_DURATION_SECONDS)
+            .forGetter(WeatherType::durationSeconds),
         ExtraCodecs.POSITIVE_FLOAT.optionalFieldOf("radius", DEFAULT_RADIUS).forGetter(WeatherType::radius),
-        ExtraCodecs.POSITIVE_FLOAT.optionalFieldOf("interest_radius", DEFAULT_INTEREST_RADIUS).forGetter(WeatherType::interestRadius),
+        ExtraCodecs.POSITIVE_FLOAT.optionalFieldOf("interest_radius", DEFAULT_INTEREST_RADIUS)
+            .forGetter(WeatherType::interestRadius),
         ExtraCodecs.NON_NEGATIVE_INT.optionalFieldOf("weight", DEFAULT_WEIGHT).forGetter(WeatherType::weight),
         Visuals.CODEC.optionalFieldOf("visuals", Visuals.NONE).forGetter(WeatherType::visuals),
-        PrecipitationMode.CODEC.optionalFieldOf("precipitation", DEFAULT_PRECIPITATION).forGetter(WeatherType::precipitation),
+        PrecipitationMode.CODEC.optionalFieldOf("precipitation", DEFAULT_PRECIPITATION)
+            .forGetter(WeatherType::precipitation),
         TagKey.codec(Registries.BIOME).optionalFieldOf("biomes").forGetter(WeatherType::biomes),
-        ResourceLocation.CODEC.listOf().optionalFieldOf("dimensions", DEFAULT_DIMENSIONS).forGetter(WeatherType::dimensions),
-        Codec.BOOL.optionalFieldOf("enabled", true).forGetter(WeatherType::enabled)
+        ResourceLocation.CODEC.listOf().optionalFieldOf("dimensions", DEFAULT_DIMENSIONS)
+            .forGetter(WeatherType::dimensions),
+        Codec.BOOL.optionalFieldOf("enabled", true).forGetter(WeatherType::enabled),
+        Codec.BOOL.optionalFieldOf("severe", false).forGetter(WeatherType::severe),
+        ConvectiveParams.CODEC.optionalFieldOf("convective").forGetter(WeatherType::convective),
+        VortexParams.CODEC.optionalFieldOf("vortex").forGetter(WeatherType::vortex),
+        Trigger.CODEC.optionalFieldOf("trigger", Trigger.ANY).forGetter(WeatherType::trigger)
     ).apply(instance, WeatherType::new)).validate(WeatherType::validate);
 
     /** Network codec used for registry sync and payloads. Nothing in a weather type needs registry access. */
@@ -94,6 +114,20 @@ public record WeatherType(
         Objects.requireNonNull(precipitation, "precipitation");
         Objects.requireNonNull(biomes, "biomes");
         dimensions = List.copyOf(Objects.requireNonNull(dimensions, "dimensions"));
+        Objects.requireNonNull(convective, "convective");
+        Objects.requireNonNull(vortex, "vortex");
+        Objects.requireNonNull(trigger, "trigger");
+    }
+
+    /**
+     * Creates a type as the second milestone knew it: not severe, without a convective or a vortex block and with
+     * {@link Trigger#ANY}.
+     */
+    public WeatherType(WeatherFamily family, Range intensity, Climate climate, Range durationSeconds, float radius,
+                       float interestRadius, int weight, Visuals visuals, PrecipitationMode precipitation,
+                       Optional<TagKey<Biome>> biomes, List<ResourceLocation> dimensions, boolean enabled) {
+        this(family, intensity, climate, durationSeconds, radius, interestRadius, weight, visuals, precipitation,
+            biomes, dimensions, enabled, false, Optional.empty(), Optional.empty(), Trigger.ANY);
     }
 
     private static DataResult<WeatherType> validate(WeatherType type) {
@@ -107,6 +141,17 @@ public record WeatherType(
             return DataResult.error(() -> "interest_radius " + type.interestRadius
                 + " must be at least radius " + type.radius);
         }
+        if (type.vortex.isPresent() && type.family != WeatherFamily.VORTEX) {
+            return DataResult.error(() -> "vortex is only allowed for the vortex family, got family "
+                + type.family.getSerializedName());
+        }
+        if (type.family == WeatherFamily.VORTEX && type.vortex.isEmpty()) {
+            return DataResult.error(() -> "a type of the vortex family needs a vortex block");
+        }
+        if (type.convective.isPresent() && type.family != WeatherFamily.CONVECTIVE) {
+            return DataResult.error(() -> "convective is only allowed for the convective family, got family "
+                + type.family.getSerializedName());
+        }
         return DataResult.success(type);
     }
 
@@ -116,11 +161,31 @@ public record WeatherType(
     }
 
     /**
-     * True when storms of this type drop something: the family is {@link WeatherFamily#PRECIPITATION} and the
-     * precipitation mode is not {@link PrecipitationMode#NONE}. Only such types switch vanilla rain on.
+     * True when storms of this type drop something: the family is {@link WeatherFamily#PRECIPITATION} or
+     * {@link WeatherFamily#CONVECTIVE} and the precipitation mode is not {@link PrecipitationMode#NONE}. Only such
+     * types switch vanilla rain on, lay snow, end on sleep and draw rain on the client.
      */
     public boolean precipitates() {
-        return family == WeatherFamily.PRECIPITATION && precipitation != PrecipitationMode.NONE;
+        return (family == WeatherFamily.PRECIPITATION || family == WeatherFamily.CONVECTIVE)
+            && precipitation != PrecipitationMode.NONE;
+    }
+
+    /** Multiplier on the configured drift factor: the convective block's value, otherwise 1. */
+    public float driftMultiplier() {
+        return convective.map(ConvectiveParams::driftMultiplier).orElse(1.0F);
+    }
+
+    /** Slowest ground speed in blocks per second: the vortex block's min_speed, else the convective block's, else 0. */
+    public float minSpeed() {
+        if (vortex.isPresent()) {
+            return vortex.get().minSpeed();
+        }
+        return convective.map(ConvectiveParams::minSpeed).orElse(0.0F);
+    }
+
+    /** Fastest ground speed in blocks per second: the vortex block's max_speed, otherwise {@link #UNLIMITED_SPEED}. */
+    public float maxSpeed() {
+        return vortex.map(VortexParams::maxSpeed).orElse(UNLIMITED_SPEED);
     }
 
     /** True when the type may form in the given dimension. */

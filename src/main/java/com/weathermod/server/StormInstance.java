@@ -5,6 +5,8 @@ import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherType;
 import com.weathermod.core.WeatherTypes;
 import com.weathermod.network.StormSnapshot;
+import java.util.Objects;
+import java.util.function.Function;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
@@ -13,11 +15,17 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * One storm in a dimension, simulated on the server. It moves with the wind, turned by a heading bias the director
- * sets, unless a command steers it; it ages toward its maximum age and ramps its intensity in over the first tenth
- * of its life and out over the last fifth. The director may cut that life short with {@link #endSoon()}.
+ * sets, unless a command steers it or its family system leads it for a tick with {@link #setMotion}; it ages toward
+ * its maximum age and ramps its intensity in over the first tenth of its life and out over the last fifth. The
+ * director may cut that life short with {@link #endSoon()}.
+ *
+ * <p>A storm may be the child of another storm, carries the hail strength its family system writes, and keeps its
+ * family's own state: as the tag it was loaded with until the family first asks for it through
+ * {@link #familyState}, as a typed object from then on.
  */
 public final class StormInstance {
     /** Cloud base height every new storm starts at. */
@@ -30,6 +38,11 @@ public final class StormInstance {
     public static final float MAX_STEER_SPEED = 64.0F;
     /** Shortest life {@link #endSoon()} leaves a storm, in ticks, so a very young storm still fades visibly. */
     public static final int MIN_FADE_TICKS = 100;
+    /** Largest drift factor the four-argument tick accepts. */
+    public static final float MAX_DRIFT_FACTOR = 4.0F;
+
+    /** A hail change larger than this is worth a sync by itself. */
+    private static final float HAIL_SYNC_STEP = 0.01F;
 
     private static final String KEY_ID = "Id";
     private static final String KEY_TYPE = "Type";
@@ -48,9 +61,12 @@ public final class StormInstance {
     private static final String KEY_NATURAL = "Natural";
     private static final String KEY_TICKS_UNSEEN = "TicksUnseen";
     private static final String KEY_HEADING_BIAS = "HeadingBias";
+    private static final String KEY_PARENT = "Parent";
+    private static final String KEY_HAIL = "Hail";
+    private static final String KEY_FAMILY = "Family";
 
     private final int id;
-    private final ResourceKey<WeatherType> type;
+    private ResourceKey<WeatherType> type;
     private double x;
     private double y;
     private double z;
@@ -66,18 +82,26 @@ public final class StormInstance {
     private boolean natural;
     private int ticksUnseen;
     private float headingBiasDegrees;
+    private int parentId;
+    private float hail;
+    private CompoundTag familyTag = new CompoundTag();
+    @Nullable
+    private FamilyState familyState;
+    private boolean motionRequested;
+    private float requestedHeadingDegrees;
+    private float requestedSpeed;
     private boolean dirty;
 
     /**
      * Creates a storm from raw values. {@code peakIntensity} is the intensity at the plateau of its life; the
      * current intensity is derived from it and the age. New storms start dirty so they are synced at once, are not
-     * natural, have no heading bias and have not been unseen.
+     * natural, have no heading bias, no parent, no hail and an empty family state, and have not been unseen.
      */
     public StormInstance(int id, ResourceKey<WeatherType> type, double x, double y, double z, float headingDegrees,
                          float speed, float peakIntensity, int ageTicks, int maxAgeTicks, float radius,
                          float interestRadius) {
         this.id = id;
-        this.type = type;
+        this.type = Objects.requireNonNull(type, "type");
         this.x = x;
         this.y = y;
         this.z = z;
@@ -123,16 +147,80 @@ public final class StormInstance {
     }
 
     /**
+     * Creates a storm exactly like {@link #create} and records the storm that spawned it. A child is not natural
+     * and is not started at its peak: its intensity follows the life envelope from zero.
+     *
+     * @param parentId id of the spawning storm; a negative id counts as 0, no parent
+     */
+    public static StormInstance createChild(int id, Holder<WeatherType> type, double x, double z, int parentId,
+                                            RandomSource random) {
+        StormInstance storm = create(id, type, x, z, random);
+        storm.parentId = Math.max(0, parentId);
+        return storm;
+    }
+
+    /**
      * Advances the storm by one tick: unless steered, takes the wind direction turned by the heading bias as its
      * heading and the wind speed times {@code driftFactor} (clamped to 0..1) as its speed; then moves along its
      * heading, ages, and recomputes the intensity from the life envelope. Always marks the storm dirty. Storms
      * travel slower than the air so a storm of a hundred blocks lingers over a player for minutes, not seconds.
+     * A pending {@link #setMotion} request is dropped unused.
      */
     public void tick(WindState wind, float driftFactor) {
         if (!steered) {
             headingDegrees = Headings.wrapDegrees(wind.directionDegrees() + headingBiasDegrees);
             speed = wind.speed() * Mth.clamp(driftFactor, 0.0F, 1.0F);
         }
+        motionRequested = false;
+        advance();
+    }
+
+    /**
+     * As {@link #tick(WindState, float)}, but the drift factor is clamped to 0..{@link #MAX_DRIFT_FACTOR} and,
+     * unless steered, the resulting speed is clamped to {@code [minSpeed, maxSpeed]}. When {@link #setMotion} was
+     * called since the last tick and the storm is not steered, that heading and that speed (clamped to
+     * {@code [minSpeed, maxSpeed]}) are used instead of the wind drift and the heading bias, and the request is
+     * cleared. The limits themselves are kept within 0..{@link #MAX_STEER_SPEED}, the lower one winning when they
+     * cross.
+     *
+     * @param minSpeed slowest ground speed of the storm's type, in blocks per second
+     * @param maxSpeed fastest ground speed of the storm's type, in blocks per second
+     */
+    public void tick(WindState wind, float driftFactor, float minSpeed, float maxSpeed) {
+        if (!steered) {
+            if (motionRequested) {
+                headingDegrees = requestedHeadingDegrees;
+                speed = clampSpeed(requestedSpeed, minSpeed, maxSpeed);
+            } else {
+                headingDegrees = Headings.wrapDegrees(wind.directionDegrees() + headingBiasDegrees);
+                float drift = wind.speed() * Mth.clamp(driftFactor, 0.0F, MAX_DRIFT_FACTOR);
+                speed = clampSpeed(drift, minSpeed, maxSpeed);
+            }
+        }
+        motionRequested = false;
+        advance();
+    }
+
+    /**
+     * Asks for this heading and ground speed on the next four-argument tick only. For family systems that lead a
+     * storm (a tornado on its parent's leash, a storm sliding along a deflector). Ignored while steered, and for a
+     * heading or speed that is not a finite number. Not saved. Sets the heading and the speed (within
+     * 0..{@link #MAX_STEER_SPEED}) at once, so the next snapshot dead-reckons correctly, and marks the storm dirty.
+     */
+    public void setMotion(float headingDegrees, float speedBlocksPerSecond) {
+        if (steered || !Float.isFinite(headingDegrees) || !Float.isFinite(speedBlocksPerSecond)) {
+            return;
+        }
+        this.requestedHeadingDegrees = Headings.wrapDegrees(headingDegrees);
+        this.requestedSpeed = Mth.clamp(speedBlocksPerSecond, 0.0F, MAX_STEER_SPEED);
+        this.motionRequested = true;
+        this.headingDegrees = this.requestedHeadingDegrees;
+        this.speed = this.requestedSpeed;
+        this.dirty = true;
+    }
+
+    /** Moves along the heading at the current speed, ages and recomputes the intensity; marks the storm dirty. */
+    private void advance() {
         double blocksThisTick = speed / SharedConstants.TICKS_PER_SECOND;
         x += Headings.directionX(headingDegrees) * blocksThisTick;
         z += Headings.directionZ(headingDegrees) * blocksThisTick;
@@ -203,7 +291,12 @@ public final class StormInstance {
         dirty = true;
     }
 
-    /** Writes the storm to a new compound tag. The dirty flag is transient and not written. */
+    /**
+     * Writes the storm to a new compound tag. The dirty flag and a pending {@link #setMotion} request are transient
+     * and not written. The parent is written only when there is one, the hail only when above zero and the family
+     * state only when it is not empty: the typed state's own {@link FamilyState#save()} once the family asked for
+     * it, otherwise the tag as loaded. A storm saved before these keys existed is therefore saved back unchanged.
+     */
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
         tag.putInt(KEY_ID, id);
@@ -223,13 +316,27 @@ public final class StormInstance {
         tag.putBoolean(KEY_NATURAL, natural);
         tag.putInt(KEY_TICKS_UNSEEN, ticksUnseen);
         tag.putFloat(KEY_HEADING_BIAS, headingBiasDegrees);
+        if (parentId != 0) {
+            tag.putInt(KEY_PARENT, parentId);
+        }
+        if (hail > 0.0F) {
+            tag.putFloat(KEY_HAIL, hail);
+        }
+        if (familyState != null) {
+            familyTag = Objects.requireNonNull(familyState.save(), "family state tag");
+        }
+        if (!familyTag.isEmpty()) {
+            tag.put(KEY_FAMILY, familyTag.copy());
+        }
         return tag;
     }
 
     /**
      * Reads a storm written by {@link #save()}. An unparseable type id falls back to the placeholder type; missing
      * radii fall back to the weather type defaults; the natural flag, the unseen ticks and the heading bias, which
-     * older saves lack, default to not natural, zero and zero. The loaded storm is not dirty.
+     * older saves lack, default to not natural, zero and zero; the parent, the hail and the family state, which
+     * saves of the second milestone lack, default to no parent, no hail and an empty state. The loaded storm is
+     * not dirty.
      */
     public static StormInstance load(CompoundTag tag) {
         ResourceLocation typeId = ResourceLocation.tryParse(tag.getString(KEY_TYPE));
@@ -255,14 +362,26 @@ public final class StormInstance {
         if (tag.contains(KEY_HEADING_BIAS, Tag.TAG_ANY_NUMERIC)) {
             storm.headingBiasDegrees = wrapBias(tag.getFloat(KEY_HEADING_BIAS));
         }
+        if (tag.contains(KEY_PARENT, Tag.TAG_ANY_NUMERIC)) {
+            storm.parentId = Math.max(0, tag.getInt(KEY_PARENT));
+        }
+        if (tag.contains(KEY_HAIL, Tag.TAG_ANY_NUMERIC)) {
+            storm.hail = clampHail(tag.getFloat(KEY_HAIL));
+        }
+        if (tag.contains(KEY_FAMILY, Tag.TAG_COMPOUND)) {
+            storm.familyTag = tag.getCompound(KEY_FAMILY).copy();
+        }
         storm.dirty = false;
         return storm;
     }
 
-    /** Builds the immutable snapshot that is sent to clients. */
+    /** Builds the immutable snapshot that is sent to clients, the parent and the hail strength included. */
     public StormSnapshot toSnapshot() {
-        return new StormSnapshot(id, type.location(), x, y, z, headingDegrees, speed, intensity, radius,
-            interestRadius, ageTicks, maxAgeTicks);
+        return new StormSnapshot(
+            new StormSnapshot.StormIdentity(id, type.location()),
+            new StormSnapshot.StormMotion(x, y, z, headingDegrees, speed),
+            new StormSnapshot.StormLife(intensity, radius, interestRadius, ageTicks, maxAgeTicks),
+            new StormSnapshot.StormDetail(parentId, hail));
     }
 
     /**
@@ -275,9 +394,13 @@ public final class StormInstance {
         this.dirty = true;
     }
 
-    /** Overrides the wind with a fixed heading and speed until {@link #releaseSteering()} is called. */
+    /**
+     * Overrides the wind with a fixed heading and speed until {@link #releaseSteering()} is called. A pending
+     * {@link #setMotion} request is dropped.
+     */
     public void steer(float headingDegrees, float speed) {
         this.steered = true;
+        this.motionRequested = false;
         this.headingDegrees = Headings.wrapDegrees(headingDegrees);
         this.speed = Mth.clamp(speed, 0.0F, MAX_STEER_SPEED);
         this.dirty = true;
@@ -312,6 +435,75 @@ public final class StormInstance {
             this.headingBiasDegrees = wrapped;
             this.dirty = true;
         }
+    }
+
+    /**
+     * Sets the hail strength, clamped to 0..1; a value that is not a number counts as 0. Marks the storm dirty
+     * when the value changes by more than 0.01 or to or from zero, so a slowly drifting strength does not ask for
+     * a sync by itself.
+     */
+    public void setHail(float strength) {
+        float clamped = clampHail(strength);
+        if (Math.abs(clamped - hail) > HAIL_SYNC_STEP || (clamped == 0.0F) != (hail == 0.0F)) {
+            dirty = true;
+        }
+        hail = clamped;
+    }
+
+    /** Moves the centre. Only for pushing a storm out of a deflector circle and for commands. Marks dirty. */
+    public void setPosition(double x, double z) {
+        this.x = x;
+        this.z = z;
+        this.dirty = true;
+    }
+
+    /**
+     * Sets the lifetime, at least {@code ageTicks + 1} so the storm lives through one more tick, and re-derives
+     * the current intensity through the life envelope. For children whose family decides how long they live.
+     * Marks dirty.
+     */
+    public void setMaxAgeTicks(int ticks) {
+        this.maxAgeTicks = Math.max(this.ageTicks + 1, ticks);
+        this.intensity = this.peakIntensity * lifeEnvelope(this.ageTicks, this.maxAgeTicks);
+        this.dirty = true;
+    }
+
+    /**
+     * Replaces the family tag with a copy of the given one and drops the cached state, so the family reads the
+     * new tag when it next asks for its state. For a child born with a prepared state. Marks dirty.
+     */
+    public void setFamilyTag(CompoundTag tag) {
+        this.familyTag = Objects.requireNonNull(tag, "tag").copy();
+        this.familyState = null;
+        this.dirty = true;
+    }
+
+    /**
+     * Changes the weather type and adopts its radii; lifetime, age, intensity and the family state are kept (a
+     * tornado that grows a tier keeps its ground height, its dig reference and its target). Marks dirty.
+     */
+    public void retype(ResourceKey<WeatherType> type, float radius, float interestRadius) {
+        this.type = Objects.requireNonNull(type, "type");
+        this.radius = Math.max(0.0F, radius);
+        this.interestRadius = Math.max(0.0F, interestRadius);
+        this.dirty = true;
+    }
+
+    /**
+     * The typed family state: the cached instance when it is of the given class, otherwise
+     * {@code loader.apply} of a copy of the tag last loaded, set or saved, which is then cached. Never null.
+     *
+     * @param kind   the state class of the calling family
+     * @param loader reads the state from a tag; an empty tag must give the family's defaults
+     * @throws NullPointerException when the loader returns null
+     */
+    public <S extends FamilyState> S familyState(Class<S> kind, Function<CompoundTag, S> loader) {
+        if (kind.isInstance(familyState)) {
+            return kind.cast(familyState);
+        }
+        S loaded = Objects.requireNonNull(loader.apply(familyTag.copy()), "family state");
+        familyState = loaded;
+        return loaded;
     }
 
     /** Squared horizontal distance from the storm centre to a point. */
@@ -420,6 +612,21 @@ public final class StormInstance {
         return headingBiasDegrees;
     }
 
+    /** Id of the storm that spawned this one; 0 when it has no parent. */
+    public int parentId() {
+        return parentId;
+    }
+
+    /** Whether another storm spawned this one. */
+    public boolean isChild() {
+        return parentId != 0;
+    }
+
+    /** Current hail strength in {@code [0, 1]}, written by the convective system. */
+    public float hail() {
+        return hail;
+    }
+
     /** Whether the storm changed since it was last sent to clients. */
     public boolean isDirty() {
         return dirty;
@@ -439,10 +646,26 @@ public final class StormInstance {
         return wrapped >= 180.0F ? -180.0F : wrapped;
     }
 
+    /** Clamps a hail strength into {@code [0, 1]}; a value that is not a number becomes zero. */
+    private static float clampHail(float strength) {
+        return Float.isNaN(strength) ? 0.0F : Mth.clamp(strength, 0.0F, 1.0F);
+    }
+
+    /**
+     * Clamps a ground speed into the limits of a type. The limits are first brought within
+     * 0..{@link #MAX_STEER_SPEED}; a limit that is not a number counts as absent.
+     */
+    private static float clampSpeed(float speed, float minSpeed, float maxSpeed) {
+        float low = Float.isNaN(minSpeed) ? 0.0F : Mth.clamp(minSpeed, 0.0F, MAX_STEER_SPEED);
+        float high = Float.isNaN(maxSpeed) ? MAX_STEER_SPEED : Mth.clamp(maxSpeed, low, MAX_STEER_SPEED);
+        return Mth.clamp(speed, low, high);
+    }
+
     @Override
     public String toString() {
         return "StormInstance[id=" + id + ", type=" + type.location() + ", x=" + x + ", z=" + z
             + ", intensity=" + intensity + ", age=" + ageTicks + "/" + maxAgeTicks
+            + (parentId != 0 ? ", parent=" + parentId : "")
             + (natural ? ", natural" : "") + (steered ? ", steered" : "") + "]";
     }
 }

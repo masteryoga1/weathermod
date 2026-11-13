@@ -35,6 +35,9 @@ class VanillaWeatherBridgeTest {
     private static final ResourceKey<WeatherType> SNOW = WeatherRegistries.key("snow");
     private static final ResourceKey<WeatherType> OVERCAST = WeatherRegistries.key("overcast");
     private static final ResourceKey<WeatherType> FOG = WeatherRegistries.key("fog");
+    private static final ResourceKey<WeatherType> SEVERE_THUNDERSTORM = WeatherRegistries.key("severe_thunderstorm");
+    private static final ResourceKey<WeatherType> DRY_THUNDERSTORM = WeatherRegistries.key("dry_thunderstorm");
+    private static final ResourceKey<WeatherType> TORNADO = WeatherRegistries.key("tornado_ef2");
     private static final ResourceKey<WeatherType> UNKNOWN = WeatherRegistries.key("not_registered");
 
     private static final Map<ResourceKey<WeatherType>, WeatherType> TYPES = Map.of(
@@ -42,7 +45,10 @@ class VanillaWeatherBridgeTest {
         THUNDERSTORM, type(WeatherFamily.PRECIPITATION, PrecipitationMode.AUTO, 0.8F),
         SNOW, type(WeatherFamily.PRECIPITATION, PrecipitationMode.SNOW, 0.0F),
         OVERCAST, type(WeatherFamily.PRECIPITATION, PrecipitationMode.NONE, 0.0F),
-        FOG, type(WeatherFamily.OBSCURANT, PrecipitationMode.AUTO, 0.9F));
+        FOG, type(WeatherFamily.OBSCURANT, PrecipitationMode.AUTO, 0.9F),
+        SEVERE_THUNDERSTORM, type(WeatherFamily.CONVECTIVE, PrecipitationMode.AUTO, 1.0F),
+        DRY_THUNDERSTORM, type(WeatherFamily.CONVECTIVE, PrecipitationMode.NONE, 1.0F),
+        TORNADO, type(WeatherFamily.VORTEX, PrecipitationMode.AUTO, 1.0F));
     private static final Function<StormInstance, WeatherType> LOOKUP = storm -> TYPES.get(storm.type());
 
     private static WeatherType type(WeatherFamily family, PrecipitationMode precipitation, float thunderLevel) {
@@ -197,5 +203,32 @@ class VanillaWeatherBridgeTest {
         assertEquals(new Decision(true, false).hashCode(), new Decision(true, false).hashCode());
         assertNotEquals(new Decision(true, false), new Decision(true, true));
         assertNotEquals(Decision.CLEAR, new Decision(true, false));
+    }
+
+    @Test
+    void coveringConvectiveStormRainsAndThunders() {
+        List<Position> players = List.of(player(5.0D, 5.0D));
+
+        Decision overhead = decide(List.of(storm(1, SEVERE_THUNDERSTORM, 0.0D, 0.0D, 1.0F)), players);
+        assertTrue(overhead.raining(), "a convective type with precipitation auto drops something");
+        assertTrue(overhead.thundering(), "and its thunder level of 1 switches vanilla thunder on");
+
+        assertEquals(Decision.CLEAR, decide(List.of(storm(2, SEVERE_THUNDERSTORM, 1000.0D, 1000.0D, 1.0F)), players),
+            "a thunderstorm covering nobody changes nothing");
+        assertEquals(Decision.CLEAR, decide(List.of(storm(3, DRY_THUNDERSTORM, 0.0D, 0.0D, 1.0F)), players),
+            "a convective type whose precipitation is none stays dry and silent");
+    }
+
+    @Test
+    void vortexStormNeitherRainsNorThunders() {
+        List<Position> players = List.of(player(0.0D, 0.0D));
+
+        assertEquals(Decision.CLEAR, decide(List.of(storm(1, TORNADO, 0.0D, 0.0D, 1.0F)), players),
+            "a vortex drops nothing, whatever its precipitation mode and thunder level say");
+
+        Decision underItsParent = decide(
+            List.of(storm(1, TORNADO, 0.0D, 0.0D, 1.0F), storm(2, SEVERE_THUNDERSTORM, 0.0D, 0.0D, 1.0F)), players);
+        assertTrue(underItsParent.raining(), "the storm that spawned it still rains");
+        assertTrue(underItsParent.thundering());
     }
 }

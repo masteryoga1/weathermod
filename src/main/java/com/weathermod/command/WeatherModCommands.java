@@ -7,14 +7,18 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
+import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.weathermod.WeatherMod;
 import com.weathermod.config.ServerConfig;
 import com.weathermod.core.PrecipitationKind;
+import com.weathermod.core.Trigger;
 import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherType;
+import com.weathermod.core.WeatherTypes;
 import com.weathermod.network.WeatherNetwork;
 import com.weathermod.server.DimensionWeatherData;
 import com.weathermod.server.StormInstance;
+import com.weathermod.server.StormRuntime;
 import com.weathermod.server.WeatherManager;
 import com.weathermod.server.WeatherSimulator;
 import com.weathermod.server.WindRegime;
@@ -24,6 +28,8 @@ import com.weathermod.server.climate.ClimateSample;
 import com.weathermod.server.climate.SeasonInfo;
 import com.weathermod.server.director.DirectorState;
 import com.weathermod.server.director.StormDirector;
+import com.weathermod.server.family.ConvectiveSystem;
+import com.weathermod.server.impact.LightningStrikes;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -39,6 +45,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.storage.LevelData;
@@ -49,16 +56,26 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * The {@code /weathermod} test commands: spawn, list, remove, clear, intensify and steer storms, set the wind, query
- * the climate at a position, drive the storm director and print the dimension's weather state. Every subcommand
- * needs permission level 2 and acts on the dimension the command source is in.
+ * The {@code /weathermod} test commands: spawn, list, remove, clear, intensify and steer storms, change a tornado's
+ * tier, strike lightning, start a downburst, set the wind, query the climate at a position, drive the storm
+ * director and print the dimension's weather state. Every subcommand needs permission level 2 and acts on the
+ * dimension the command source is in.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID)
 public final class WeatherModCommands {
     /** Root literal of the command tree. */
     public static final String ROOT = "weathermod";
-    /** Vanilla permission level required for every subcommand; 2 is the game master level that {@code /weather} uses. */
+    /**
+     * Vanilla permission level required for every subcommand; 2 is the game master level that {@code /weather}
+     * uses.
+     */
     public static final int PERMISSION_LEVEL = 2;
+    /** Highest EF tier {@code storm tier} accepts. */
+    public static final int MAX_TORNADO_TIER = 5;
+    /** Radius of the downburst {@code storm downburst} starts, in blocks. */
+    public static final float DOWNBURST_RADIUS_BLOCKS = 24.0F;
+    /** Peak outflow of the downburst {@code storm downburst} starts, in blocks per second. */
+    public static final float DOWNBURST_SPEED_BLOCKS_PER_SECOND = 20.0F;
 
     private static final String TRANSLATION_PREFIX = "command." + WeatherMod.MOD_ID + ".";
     private static final String KIND_PREFIX = TRANSLATION_PREFIX + "climate.kind.";
@@ -71,6 +88,7 @@ public final class WeatherModCommands {
     private static final String ARG_HEADING = "headingDegrees";
     private static final String ARG_DIRECTION = "directionDegrees";
     private static final String ARG_SPEED = "speed";
+    private static final String ARG_TIER = "tier";
 
     private static final DynamicCommandExceptionType ERROR_STORM_NOT_FOUND = new DynamicCommandExceptionType(
         id -> Component.translatable(TRANSLATION_PREFIX + "storm.not_found", id));
@@ -80,10 +98,15 @@ public final class WeatherModCommands {
         max -> Component.translatable(TRANSLATION_PREFIX + "storm.spawn_failed_full", max));
     private static final DynamicCommandExceptionType ERROR_NO_FITTING_TYPE = new DynamicCommandExceptionType(
         player -> Component.translatable(TRANSLATION_PREFIX + "director.spawn_failed_no_type", player));
+    private static final DynamicCommandExceptionType ERROR_NOT_TORNADO = new DynamicCommandExceptionType(
+        id -> Component.translatable(TRANSLATION_PREFIX + "storm.tier_not_tornado", id));
+    private static final SimpleCommandExceptionType ERROR_STRIKE_FAILED = new SimpleCommandExceptionType(
+        Component.translatable(TRANSLATION_PREFIX + "storm.strike_failed"));
 
     private WeatherModCommands() {
     }
 
+    /** Registers the command tree when the server collects its commands. */
     @SubscribeEvent
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         register(event.getDispatcher(), event.getBuildContext());
@@ -96,7 +119,8 @@ public final class WeatherModCommands {
             .requires(source -> source.hasPermission(PERMISSION_LEVEL))
             .then(Commands.literal("storm")
                 .then(Commands.literal("spawn")
-                    .then(Commands.argument(ARG_TYPE, ResourceArgument.resource(context, WeatherRegistries.WEATHER_TYPE))
+                    .then(Commands.argument(ARG_TYPE,
+                            ResourceArgument.resource(context, WeatherRegistries.WEATHER_TYPE))
                         .executes(ctx -> spawn(ctx, ctx.getSource().getPosition(), null))
                         .then(Commands.argument(ARG_POS, Vec3Argument.vec3())
                             .executes(ctx -> spawn(ctx, Vec3Argument.getVec3(ctx, ARG_POS), null))
@@ -118,17 +142,32 @@ public final class WeatherModCommands {
                 .then(Commands.literal("steer")
                     .then(Commands.argument(ARG_ID, IntegerArgumentType.integer(1))
                         .then(Commands.argument(ARG_HEADING, FloatArgumentType.floatArg())
-                            .then(Commands.argument(ARG_SPEED, FloatArgumentType.floatArg(0.0F, StormInstance.MAX_STEER_SPEED))
+                            .then(Commands.argument(ARG_SPEED,
+                                    FloatArgumentType.floatArg(0.0F, StormInstance.MAX_STEER_SPEED))
                                 .executes(ctx -> steer(ctx, IntegerArgumentType.getInteger(ctx, ARG_ID),
                                     FloatArgumentType.getFloat(ctx, ARG_HEADING),
                                     FloatArgumentType.getFloat(ctx, ARG_SPEED)))))))
                 .then(Commands.literal("release")
                     .then(Commands.argument(ARG_ID, IntegerArgumentType.integer(1))
-                        .executes(ctx -> release(ctx, IntegerArgumentType.getInteger(ctx, ARG_ID))))))
+                        .executes(ctx -> release(ctx, IntegerArgumentType.getInteger(ctx, ARG_ID)))))
+                .then(Commands.literal("tier")
+                    .then(Commands.argument(ARG_ID, IntegerArgumentType.integer(1))
+                        .then(Commands.argument(ARG_TIER, IntegerArgumentType.integer(0, MAX_TORNADO_TIER))
+                            .executes(ctx -> tier(ctx, IntegerArgumentType.getInteger(ctx, ARG_ID),
+                                IntegerArgumentType.getInteger(ctx, ARG_TIER))))))
+                .then(Commands.literal("strike")
+                    .executes(ctx -> strike(ctx, ctx.getSource().getPosition()))
+                    .then(Commands.argument(ARG_POS, Vec3Argument.vec3())
+                        .executes(ctx -> strike(ctx, Vec3Argument.getVec3(ctx, ARG_POS)))))
+                .then(Commands.literal("downburst")
+                    .executes(ctx -> downburst(ctx, ctx.getSource().getPosition()))
+                    .then(Commands.argument(ARG_POS, Vec3Argument.vec3())
+                        .executes(ctx -> downburst(ctx, Vec3Argument.getVec3(ctx, ARG_POS))))))
             .then(Commands.literal("wind")
                 .then(Commands.literal("set")
                     .then(Commands.argument(ARG_DIRECTION, FloatArgumentType.floatArg())
-                        .then(Commands.argument(ARG_SPEED, FloatArgumentType.floatArg(WindState.MIN_SPEED, WindState.MAX_SPEED))
+                        .then(Commands.argument(ARG_SPEED,
+                                FloatArgumentType.floatArg(WindState.MIN_SPEED, WindState.MAX_SPEED))
                             .executes(ctx -> setWind(ctx, FloatArgumentType.getFloat(ctx, ARG_DIRECTION),
                                 FloatArgumentType.getFloat(ctx, ARG_SPEED)))))))
             .then(Commands.literal("climate")
@@ -144,7 +183,8 @@ public final class WeatherModCommands {
                     .executes(ctx -> setDirectorPaused(ctx, false)))
                 .then(Commands.literal("spawn")
                     .executes(ctx -> directorSpawn(ctx, null))
-                    .then(Commands.argument(ARG_TYPE, ResourceArgument.resource(context, WeatherRegistries.WEATHER_TYPE))
+                    .then(Commands.argument(ARG_TYPE,
+                            ResourceArgument.resource(context, WeatherRegistries.WEATHER_TYPE))
                         .executes(ctx -> directorSpawn(ctx,
                             ResourceArgument.getResource(ctx, ARG_TYPE, WeatherRegistries.WEATHER_TYPE))))))
             .then(Commands.literal("info")
@@ -160,7 +200,8 @@ public final class WeatherModCommands {
         CommandSourceStack source = ctx.getSource();
         ServerLevel level = source.getLevel();
         requireEnabled(level);
-        Holder.Reference<WeatherType> type = ResourceArgument.getResource(ctx, ARG_TYPE, WeatherRegistries.WEATHER_TYPE);
+        Holder.Reference<WeatherType> type =
+            ResourceArgument.getResource(ctx, ARG_TYPE, WeatherRegistries.WEATHER_TYPE);
 
         StormInstance storm = WeatherManager.spawn(level, type, pos.x(), pos.z(), intensity);
         if (storm == null) {
@@ -178,7 +219,10 @@ public final class WeatherModCommands {
         return id;
     }
 
-    /** {@code /weathermod storm list}: one line per storm in the source's dimension. Returns the storm count. */
+    /**
+     * {@code /weathermod storm list}: one line per storm in the source's dimension, naming the parent of a child
+     * storm and the hail strength while hail falls. Returns the storm count.
+     */
     private static int list(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerLevel level = source.getLevel();
@@ -190,7 +234,8 @@ public final class WeatherModCommands {
         }
 
         int count = storms.size();
-        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.list.header", count, dimension), false);
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "storm.list.header", count, dimension), false);
         for (StormInstance storm : storms) {
             MutableComponent line = describe(storm);
             source.sendSuccess(() -> line, false);
@@ -229,7 +274,8 @@ public final class WeatherModCommands {
         WeatherManager.sync(level, storm);
 
         int percent = percent(storm.peakIntensity());
-        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.intensified", highlight(id), percent), true);
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "storm.intensified", highlight(id), percent), true);
         return Command.SINGLE_SUCCESS;
     }
 
@@ -267,6 +313,77 @@ public final class WeatherModCommands {
         WeatherManager.sync(level, storm);
 
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.released", highlight(id)), true);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * {@code /weathermod storm tier <id> <tier>}: turns a tornado into the tornado type of another EF tier at once.
+     * The storm keeps its age, lifetime and intensity, and its vortex state keeps the ground and the dig reference
+     * and takes the new tier as its target, so the tornado stays at that tier. Fails for a storm that is not a
+     * rated tornado.
+     */
+    private static int tier(CommandContext<CommandSourceStack> ctx, int id, int tier) throws CommandSyntaxException {
+        CommandSourceStack source = ctx.getSource();
+        ServerLevel level = source.getLevel();
+        requireEnabled(level);
+        DimensionWeatherData data = WeatherManager.get(level);
+        StormInstance storm = findStorm(data, id);
+
+        boolean tornado = WeatherManager.type(level, storm)
+            .flatMap(WeatherType::vortex)
+            .map(params -> params.kind().isRated())
+            .orElse(false);
+        if (!tornado) {
+            throw ERROR_NOT_TORNADO.create(id);
+        }
+        ResourceKey<WeatherType> key = WeatherTypes.tornado(tier);
+        Holder.Reference<WeatherType> type = WeatherRegistries.holder(level.registryAccess(), key)
+            .orElseThrow(() -> ResourceArgument.ERROR_UNKNOWN_RESOURCE.create(key.location(), key.registry()));
+
+        WeatherManager.retype(level, storm, type);
+
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "storm.tier_set", highlight(id), tier), true);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * {@code /weathermod storm strike [<pos>]}: strikes the surface at the horizontal position with one of the
+     * mod's lightning bolts, the caller's own position by default. The bolt follows the destruction mode and the
+     * deflectors as a storm's bolt does but asks for no fire by itself. Fails where no bolt could be spawned, as
+     * in a chunk that is not loaded.
+     */
+    private static int strike(CommandContext<CommandSourceStack> ctx, Vec3 pos) throws CommandSyntaxException {
+        CommandSourceStack source = ctx.getSource();
+        ServerLevel level = source.getLevel();
+        requireEnabled(level);
+
+        if (!LightningStrikes.strikeAt(level, pos.x(), pos.z(), 0.0F)) {
+            throw ERROR_STRIKE_FAILED.create();
+        }
+
+        String x = formatDecimal(pos.x());
+        String z = formatDecimal(pos.z());
+        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.strike", x, z), true);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * {@code /weathermod storm downburst [<pos>]}: starts a downburst of {@link #DOWNBURST_RADIUS_BLOCKS} radius
+     * and {@link #DOWNBURST_SPEED_BLOCKS_PER_SECOND} peak outflow centred on the horizontal position, the caller's
+     * own position by default.
+     */
+    private static int downburst(CommandContext<CommandSourceStack> ctx, Vec3 pos) throws CommandSyntaxException {
+        CommandSourceStack source = ctx.getSource();
+        ServerLevel level = source.getLevel();
+        requireEnabled(level);
+
+        ConvectiveSystem.startDownburst(level, pos.x(), pos.z(), DOWNBURST_RADIUS_BLOCKS,
+            DOWNBURST_SPEED_BLOCKS_PER_SECOND);
+
+        String x = formatDecimal(pos.x());
+        String z = formatDecimal(pos.z());
+        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "storm.downburst", x, z), true);
         return Command.SINGLE_SUCCESS;
     }
 
@@ -317,7 +434,8 @@ public final class WeatherModCommands {
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "climate.sample",
             temperature, humidity, kind), false);
         if (season.isNone()) {
-            source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "climate.season_none", provider), false);
+            source.sendSuccess(
+                () -> Component.translatable(TRANSLATION_PREFIX + "climate.season_none", provider), false);
         } else {
             source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "climate.season",
                 season.name(), seasonPercent, provider), false);
@@ -327,8 +445,9 @@ public final class WeatherModCommands {
 
     /**
      * {@code /weathermod director status}: whether the director is paused, the seconds until its next spawn attempt,
-     * the natural storm count against the cap, when it last spawned and the frequency multiplier. Returns the
-     * seconds until the next attempt.
+     * the natural storm count against the cap, when it last spawned, the frequency multiplier, whether severe
+     * weather may form or how long its cooldown still runs, and the front lying over the caller's position, which
+     * decides whether squall lines and derechos may form there. Returns the seconds until the next attempt.
      */
     private static int directorStatus(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
@@ -346,6 +465,9 @@ public final class WeatherModCommands {
         int naturalSpawns = state.naturalSpawns;
         double frequency = WeatherManager.stormFrequency();
         String frequencyText = formatHundredths(frequency);
+        int severeCooldownSeconds = StormDirector.severeCooldownSeconds(level);
+        Vec3 here = source.getPosition();
+        Component front = frontLine(StormDirector.frontAt(level, here.x(), here.z()));
 
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "director.status.header", dimension)
             .withStyle(ChatFormatting.GOLD), false);
@@ -361,12 +483,18 @@ public final class WeatherModCommands {
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "director.status.storms",
             naturalStorms, maxStorms), false);
         source.sendSuccess(() -> state.hasSpawned()
-            ? Component.translatable(TRANSLATION_PREFIX + "director.status.last_spawn", lastSpawnSecondsAgo, naturalSpawns)
+            ? Component.translatable(TRANSLATION_PREFIX + "director.status.last_spawn",
+                lastSpawnSecondsAgo, naturalSpawns)
             : Component.translatable(TRANSLATION_PREFIX + "director.status.no_spawn"), false);
         source.sendSuccess(() -> frequency > 0.0D
             ? Component.translatable(TRANSLATION_PREFIX + "director.status.frequency", frequencyText)
-            : Component.translatable(TRANSLATION_PREFIX + "director.status.frequency_off").withStyle(ChatFormatting.RED),
+            : Component.translatable(TRANSLATION_PREFIX + "director.status.frequency_off")
+                .withStyle(ChatFormatting.RED),
             false);
+        source.sendSuccess(() -> severeCooldownSeconds > 0
+            ? Component.translatable(TRANSLATION_PREFIX + "director.status.severe_cooldown", severeCooldownSeconds)
+            : Component.translatable(TRANSLATION_PREFIX + "director.status.severe_ready"), false);
+        source.sendSuccess(() -> front, false);
         return secondsUntilAttempt;
     }
 
@@ -399,8 +527,8 @@ public final class WeatherModCommands {
      * the calling player, ignoring the spawn timer but not the storm cap. Without a type the director picks one that
      * fits the climate there, which may find nothing. Returns the new storm's id.
      */
-    private static int directorSpawn(CommandContext<CommandSourceStack> ctx, @Nullable Holder.Reference<WeatherType> type)
-            throws CommandSyntaxException {
+    private static int directorSpawn(CommandContext<CommandSourceStack> ctx,
+                                     @Nullable Holder.Reference<WeatherType> type) throws CommandSyntaxException {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayerOrException();
         ServerLevel level = source.getLevel();
@@ -428,8 +556,10 @@ public final class WeatherModCommands {
 
     /**
      * {@code /weathermod info}: whether the dimension is enabled, its storm count against the cap, the wind with its
-     * regime and gust, the season at the caller, the vanilla weather bridge and the vanilla flags, the director and
-     * the configured destruction mode. Returns the storm count.
+     * regime and gust, the season at the caller, the vanilla weather bridge and the vanilla flags, the director,
+     * the configured destruction mode, the published vortices, the flying blocks against the dimension's cap, the
+     * weather deflectors (in loaded and unloaded chunks alike) and the Create shield volumes near vortices, with a
+     * note while their limit is exceeded and nothing is ripped. Returns the storm count.
      */
     private static int info(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
@@ -461,14 +591,27 @@ public final class WeatherModCommands {
         boolean directorPaused = StormDirector.isPaused(level);
         int secondsUntilAttempt = StormDirector.secondsUntilNextAttempt(level);
         Component destructionMode = destructionModeName();
+        StormRuntime runtime = data.runtime();
+        int vortices = runtime.vortices().size();
+        int flyingBlocks = runtime.flyingBlocksTotal();
+        int maxFlyingBlocks = runtime.maxFlyingBlocks();
+        int deflectors = data.deflectors().size();
+        MutableComponent shields = Component.translatable(TRANSLATION_PREFIX + "info.shields",
+            runtime.shields().size());
+        if (runtime.shields().isOverflowing()) {
+            shields.append(Component.translatable(TRANSLATION_PREFIX + "info.shields.overflow")
+                .withStyle(ChatFormatting.RED));
+        }
 
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.header", dimension)
             .withStyle(ChatFormatting.GOLD), false);
         source.sendSuccess(() -> enabled
             ? Component.translatable(TRANSLATION_PREFIX + "info.enabled").withStyle(ChatFormatting.GREEN)
             : Component.translatable(TRANSLATION_PREFIX + "info.disabled").withStyle(ChatFormatting.RED), false);
-        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.storms", stormCount, maxStorms), false);
-        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.wind", direction, blocksPerSecond), false);
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "info.storms", stormCount, maxStorms), false);
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "info.wind", direction, blocksPerSecond), false);
         source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.wind_regime",
             regime, prevailing, gust, gusting), false);
         source.sendSuccess(() -> season.isNone()
@@ -481,7 +624,14 @@ public final class WeatherModCommands {
         source.sendSuccess(() -> directorPaused
             ? Component.translatable(TRANSLATION_PREFIX + "info.director_paused").withStyle(ChatFormatting.YELLOW)
             : Component.translatable(TRANSLATION_PREFIX + "info.director_running", secondsUntilAttempt), false);
-        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.destruction_mode", destructionMode), false);
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "info.destruction_mode", destructionMode), false);
+        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.vortices", vortices), false);
+        source.sendSuccess(
+            () -> Component.translatable(TRANSLATION_PREFIX + "info.flying_blocks", flyingBlocks, maxFlyingBlocks),
+            false);
+        source.sendSuccess(() -> Component.translatable(TRANSLATION_PREFIX + "info.deflectors", deflectors), false);
+        source.sendSuccess(() -> shields, false);
         return stormCount;
     }
 
@@ -498,8 +648,9 @@ public final class WeatherModCommands {
     }
 
     /**
-     * One chat line for {@code storm list}: id, type, position, heading and speed, intensity, age, and whether the
-     * storm is steered by a command or was spawned by the director.
+     * One chat line for {@code storm list}: id, type, position, heading and speed, intensity, age, whether the
+     * storm is steered by a command or was spawned by the director and, appended, the storm that spawned it when
+     * it is a child and its hail strength while that rounds to at least one percent.
      */
     private static MutableComponent describe(StormInstance storm) {
         Component steered = storm.isSteered()
@@ -508,7 +659,7 @@ public final class WeatherModCommands {
         Component natural = storm.isNatural()
             ? Component.translatable(TRANSLATION_PREFIX + "storm.list.natural").withStyle(ChatFormatting.GRAY)
             : Component.empty();
-        return Component.translatable(TRANSLATION_PREFIX + "storm.list.entry",
+        MutableComponent line = Component.translatable(TRANSLATION_PREFIX + "storm.list.entry",
             highlight(storm.id()),
             storm.typeId().toString(),
             formatDecimal(storm.x()),
@@ -520,6 +671,26 @@ public final class WeatherModCommands {
             seconds(storm.maxAgeTicks()),
             steered,
             natural);
+        if (storm.isChild()) {
+            line.append(Component.translatable(TRANSLATION_PREFIX + "storm.list.child", storm.parentId())
+                .withStyle(ChatFormatting.GRAY));
+        }
+        int hailPercent = percent(storm.hail());
+        if (hailPercent > 0) {
+            line.append(Component.translatable(TRANSLATION_PREFIX + "storm.list.hail", hailPercent));
+        }
+        return line;
+    }
+
+    /** The {@code director status} line for a front name as {@code StormDirector.frontAt} reports it. */
+    private static Component frontLine(String front) {
+        if (Trigger.FRONT_COLD.equals(front)) {
+            return Component.translatable(TRANSLATION_PREFIX + "director.status.front_cold");
+        }
+        if (Trigger.FRONT_WARM.equals(front)) {
+            return Component.translatable(TRANSLATION_PREFIX + "director.status.front_warm");
+        }
+        return Component.translatable(TRANSLATION_PREFIX + "director.status.front_none");
     }
 
     /** The configured destruction mode's display name, or a placeholder before the server config has loaded. */

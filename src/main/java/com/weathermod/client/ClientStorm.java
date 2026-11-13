@@ -28,6 +28,8 @@ public final class ClientStorm {
     private float interestRadius;
     private int ageTicks;
     private int maxAgeTicks;
+    private int parentId;
+    private float hail;
     private int ticksSinceUpdate;
 
     /** Creates a storm from its first snapshot; previous and current state start out equal. */
@@ -155,6 +157,16 @@ public final class ClientStorm {
         return maxAgeTicks;
     }
 
+    /** Id of the storm that spawned this one, as last synced; 0 when it has no parent. */
+    public int parentId() {
+        return parentId;
+    }
+
+    /** Hail strength in {@code [0, 1]} as last synced; 0 while no hail falls. */
+    public float hail() {
+        return hail;
+    }
+
     /** Age in whole real seconds. */
     public int ageSeconds() {
         return ageTicks / SharedConstants.TICKS_PER_SECOND;
@@ -217,6 +229,8 @@ public final class ClientStorm {
         this.interestRadius = snapshot.interestRadius();
         this.ageTicks = snapshot.ageTicks();
         this.maxAgeTicks = snapshot.maxAgeTicks();
+        this.parentId = snapshot.parentId();
+        this.hail = snapshot.hail();
         this.ticksSinceUpdate = 0;
     }
 

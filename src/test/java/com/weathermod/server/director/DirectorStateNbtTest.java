@@ -6,18 +6,21 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.util.RandomSource;
 import org.junit.jupiter.api.Test;
 
 /**
- * Round-trips the director's state through NBT, checks the defaults a pre-director tag falls back to and the
- * re-arm arithmetic the spawn timer runs on. Needs no Minecraft bootstrap.
+ * Round-trips the director's state through NBT, checks the defaults a tag of an earlier milestone falls back to,
+ * the severe-weather mark that is only written when set, and the re-arm arithmetic the spawn timer runs on. Needs
+ * no Minecraft bootstrap.
  */
 class DirectorStateNbtTest {
     private static final String KEY_TICKS_UNTIL_ATTEMPT = "TicksUntilAttempt";
     private static final String KEY_PAUSED = "Paused";
     private static final String KEY_LAST_SPAWN_GAME_TIME = "LastSpawnGameTime";
     private static final String KEY_NATURAL_SPAWNS = "NaturalSpawns";
+    private static final String KEY_SEVERE_READY_GAME_TIME = "SevereReadyGameTime";
 
     @Test
     void freshStateIsDueUnpausedAndEmpty() {
@@ -165,5 +168,66 @@ class DirectorStateNbtTest {
         assertEquals(ticks, state.ticksUntilAttempt);
         assertTrue(ticks >= 2400 && ticks <= 7200);
         assertNotEquals(0, state.secondsUntilAttempt());
+    }
+
+    @Test
+    void severeReadyGameTimeRoundTrips() {
+        DirectorState state = new DirectorState(4321, true, 987654321L, 17, 1234567L);
+
+        CompoundTag tag = state.save();
+        DirectorState loaded = DirectorState.load(tag);
+
+        assertTrue(tag.contains(KEY_SEVERE_READY_GAME_TIME, Tag.TAG_LONG), "the mark is written as a long");
+        assertEquals(1234567L, tag.getLong(KEY_SEVERE_READY_GAME_TIME));
+        assertEquals(1234567L, loaded.severeReadyGameTime);
+        assertEquals(4321, loaded.ticksUntilAttempt, "the older fields load as before");
+        assertEquals(state, loaded);
+        assertEquals(state.hashCode(), loaded.hashCode());
+        assertEquals(tag, loaded.save());
+    }
+
+    @Test
+    void severeReadyGameTimeDefaultsToZeroAndIsNotWrittenThen() {
+        assertEquals(0L, new DirectorState().severeReadyGameTime, "a fresh world may have a severe storm at once");
+        assertEquals(0L, new DirectorState(100, false, 5L, 2).severeReadyGameTime,
+            "the four-argument constructor leaves the mark unset");
+        assertEquals(new DirectorState(100, false, 5L, 2), new DirectorState(100, false, 5L, 2, 0L));
+
+        CompoundTag secondMilestone = new CompoundTag();
+        secondMilestone.putInt(KEY_TICKS_UNTIL_ATTEMPT, 100);
+        secondMilestone.putBoolean(KEY_PAUSED, false);
+        secondMilestone.putLong(KEY_LAST_SPAWN_GAME_TIME, 5L);
+        secondMilestone.putInt(KEY_NATURAL_SPAWNS, 2);
+
+        DirectorState loaded = DirectorState.load(secondMilestone);
+
+        assertEquals(0L, loaded.severeReadyGameTime, "a tag without the key loads an unset mark");
+        assertEquals(secondMilestone, loaded.save(), "a tag of the second milestone is saved back unchanged");
+        assertFalse(loaded.save().contains(KEY_SEVERE_READY_GAME_TIME));
+        assertEquals(4, loaded.save().size());
+
+        loaded.severeReadyGameTime = 18000L;
+        assertEquals(18000L, loaded.save().getLong(KEY_SEVERE_READY_GAME_TIME), "the live field is saved in place");
+        assertEquals(5, loaded.save().size());
+        loaded.severeReadyGameTime = 0L;
+        assertFalse(loaded.save().contains(KEY_SEVERE_READY_GAME_TIME), "and dropped again once it is zero");
+    }
+
+    @Test
+    void severeReadyGameTimeTakesPartInEqualityAndIsClamped() {
+        DirectorState state = new DirectorState(1, false, 2L, 3, 400L);
+
+        assertEquals(state, new DirectorState(1, false, 2L, 3, 400L));
+        assertNotEquals(state, new DirectorState(1, false, 2L, 3, 401L));
+        assertNotEquals(state, new DirectorState(1, false, 2L, 3));
+        assertNotEquals(state.hashCode(), new DirectorState(1, false, 2L, 3, 401L).hashCode());
+        assertTrue(state.toString().contains("severeReadyGameTime=400"), state.toString());
+
+        assertEquals(0L, new DirectorState(1, false, 2L, 3, -9L).severeReadyGameTime, "a negative mark is no mark");
+        CompoundTag tag = new CompoundTag();
+        tag.putLong(KEY_SEVERE_READY_GAME_TIME, -1L);
+        assertEquals(0L, DirectorState.load(tag).severeReadyGameTime);
+        tag.putString(KEY_SEVERE_READY_GAME_TIME, "soon");
+        assertEquals(0L, DirectorState.load(tag).severeReadyGameTime, "a mark of the wrong tag type is ignored");
     }
 }

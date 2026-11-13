@@ -14,7 +14,9 @@ import net.minecraft.world.level.storage.ServerLevelData;
 /**
  * Keeps the vanilla rain and thunder flags of a dimension in step with the storms: vanilla rains while a
  * precipitating storm covers a player and is dry otherwise, so crops, cauldrons, fishing and mob spawning respond
- * to the mod's weather. The decision is pure; applying it is the only part that touches the level.
+ * to the mod's weather. Storms of the precipitation family and of the convective family precipitate unless their
+ * type says nothing falls, so a thunderstorm overhead switches vanilla rain and thunder on; a vortex, a fog bank
+ * or a dust storm leaves vanilla dry. The decision is pure; applying it is the only part that touches the level.
  */
 public final class VanillaWeatherBridge {
     /** A player needs at least this coverage from a precipitating storm for vanilla rain to switch on. */
@@ -43,9 +45,9 @@ public final class VanillaWeatherBridge {
 
     /**
      * Decides the vanilla flags from the storms and the players of a dimension. Vanilla rains when some player has
-     * at least {@link #RAIN_COVERAGE_THRESHOLD} coverage from a storm whose type precipitates, and thunders when
-     * such a covering storm's type has at least {@link #THUNDER_VISUAL_THRESHOLD} thunder level. Storms whose type
-     * cannot be resolved are ignored.
+     * at least {@link #RAIN_COVERAGE_THRESHOLD} coverage from a storm whose type precipitates, see
+     * {@link WeatherType#precipitates()}, and thunders when such a covering storm's type has at least
+     * {@link #THUNDER_VISUAL_THRESHOLD} thunder level. Storms whose type cannot be resolved are ignored.
      */
     public static Decision decide(List<StormInstance> storms, Function<StormInstance, WeatherType> types,
                                   List<? extends Position> players) {

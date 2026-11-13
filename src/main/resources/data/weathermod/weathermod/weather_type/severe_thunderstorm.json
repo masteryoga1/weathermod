@@ -1,0 +1,43 @@
+{
+  "family": "convective",
+  "intensity": {
+    "min": 0.7,
+    "max": 1.0
+  },
+  "climate": {
+    "min_temperature": 0.4,
+    "max_temperature": 1.5,
+    "min_humidity": 0.5,
+    "max_humidity": 1.0
+  },
+  "duration_seconds": {
+    "min": 420.0,
+    "max": 900.0
+  },
+  "radius": 192.0,
+  "interest_radius": 768.0,
+  "weight": 3,
+  "visuals": {
+    "rain_level": 1.0,
+    "thunder_level": 1.0,
+    "haze_strength": 0.5
+  },
+  "precipitation": "auto",
+  "severe": true,
+  "trigger": {
+    "front_weight": 3
+  },
+  "convective": {
+    "lightning_per_minute": 11.0,
+    "lightning_fire_chance": 0.1,
+    "hail": 0.5,
+    "hail_damage": 1.0,
+    "downbursts_per_minute": 0.6,
+    "downburst_radius": 24.0,
+    "downburst_speed": 22.0,
+    "outflow_speed": 8.0,
+    "drift_multiplier": 1.2,
+    "small_vortex": "weathermod:gustnado",
+    "small_vortices_per_minute": 0.1
+  }
+}

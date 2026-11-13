@@ -9,8 +9,9 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * The registry of {@link FamilySystem}s: one system per supported family. Families without a system are still
- * simulated as moving storms but have no server-side effect, and the director never spawns them naturally.
+ * The registry of {@link FamilySystem}s: one system per supported family, which are the precipitation, the
+ * obscurant, the convective and the vortex family. Families without a system are still simulated as moving storms
+ * but have no server-side effect, and the director never spawns them naturally.
  */
 public final class FamilySystems {
     private static final Map<WeatherFamily, FamilySystem> SYSTEMS;
@@ -20,6 +21,8 @@ public final class FamilySystems {
         EnumMap<WeatherFamily, FamilySystem> systems = new EnumMap<>(WeatherFamily.class);
         register(systems, new PrecipitationSystem());
         register(systems, new ObscurantSystem());
+        register(systems, new ConvectiveSystem());
+        register(systems, new VortexSystem());
         SYSTEMS = Collections.unmodifiableMap(systems);
         SUPPORTED = Collections.unmodifiableSet(EnumSet.copyOf(systems.keySet()));
     }
@@ -40,7 +43,7 @@ public final class FamilySystems {
         return family == null ? Optional.empty() : Optional.ofNullable(SYSTEMS.get(family));
     }
 
-    /** The families with a system, in enum order: precipitation and obscurant in this milestone. */
+    /** The families with a system, in enum order: precipitation, convective, vortex and obscurant. */
     public static Set<WeatherFamily> supported() {
         return SUPPORTED;
     }

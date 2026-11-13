@@ -2,25 +2,169 @@ package com.weathermod.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.mojang.datafixers.util.Either;
+import com.weathermod.core.PrecipitationMode;
+import com.weathermod.core.WeatherFamily;
 import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherType;
 import com.weathermod.core.WeatherTypes;
+import com.weathermod.network.StormSnapshot;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
+import net.minecraft.core.Holder;
+import net.minecraft.core.HolderOwner;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.TagKey;
+import net.minecraft.util.RandomSource;
 import org.junit.jupiter.api.Test;
 
 /**
- * Round-trips a storm through NBT and checks the life envelope, movement, heading bias and early-ending rules.
- * Needs no Minecraft bootstrap: only NBT, resource keys and plain arithmetic are involved.
+ * Round-trips a storm through NBT and checks the life envelope, movement, speed limits, led motion, heading bias,
+ * early-ending rules, the parent, the hail strength and the family state. Needs no Minecraft bootstrap: only NBT,
+ * resource keys, a hand-written holder and plain arithmetic are involved.
  */
 class StormInstanceNbtTest {
     private static final float EPSILON = 1.0E-5F;
+    private static final Function<CompoundTag, CounterState> MUST_NOT_LOAD = tag -> {
+        throw new AssertionError("the cached family state must be returned without loading");
+    };
+
+    /** A holder that looks registered: a key and a value, which is all a storm reads from the holder of its type. */
+    static final class KeyedHolder implements Holder<WeatherType> {
+        private final ResourceKey<WeatherType> key;
+        private final WeatherType value;
+
+        KeyedHolder(ResourceKey<WeatherType> key, WeatherType value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        @Override
+        public WeatherType value() {
+            return value;
+        }
+
+        @Override
+        public boolean isBound() {
+            return true;
+        }
+
+        @Override
+        public boolean is(ResourceLocation location) {
+            return key.location().equals(location);
+        }
+
+        @Override
+        public boolean is(ResourceKey<WeatherType> resourceKey) {
+            return key.equals(resourceKey);
+        }
+
+        @Override
+        public boolean is(Predicate<ResourceKey<WeatherType>> predicate) {
+            return predicate.test(key);
+        }
+
+        @Override
+        public boolean is(TagKey<WeatherType> tagKey) {
+            return false;
+        }
+
+        @Override
+        @SuppressWarnings("deprecation")
+        public boolean is(Holder<WeatherType> holder) {
+            return holder == this;
+        }
+
+        @Override
+        public Stream<TagKey<WeatherType>> tags() {
+            return Stream.empty();
+        }
+
+        @Override
+        public Either<ResourceKey<WeatherType>, WeatherType> unwrap() {
+            return Either.left(key);
+        }
+
+        @Override
+        public Optional<ResourceKey<WeatherType>> unwrapKey() {
+            return Optional.of(key);
+        }
+
+        @Override
+        public Kind kind() {
+            return Kind.REFERENCE;
+        }
+
+        @Override
+        public boolean canSerializeIn(HolderOwner<WeatherType> owner) {
+            return true;
+        }
+    }
+
+    /** A family state of one counter, written under {@code "Count"} only when it is not zero. */
+    private static final class CounterState implements FamilyState {
+        private int count;
+
+        static CounterState load(CompoundTag tag) {
+            CounterState state = new CounterState();
+            state.count = tag.getInt("Count");
+            return state;
+        }
+
+        @Override
+        public CompoundTag save() {
+            CompoundTag tag = new CompoundTag();
+            if (count != 0) {
+                tag.putInt("Count", count);
+            }
+            return tag;
+        }
+    }
+
+    /** The state of some other family, to show that a state of the wrong class is not handed out. */
+    private static final class OtherState implements FamilyState {
+        @Override
+        public CompoundTag save() {
+            CompoundTag tag = new CompoundTag();
+            tag.putBoolean("Other", true);
+            return tag;
+        }
+    }
 
     private static StormInstance sampleStorm() {
         ResourceKey<WeatherType> type = WeatherRegistries.key("rain");
         return new StormInstance(42, type, 123.5D, 160.0D, -77.25D, 215.5F, 3.25F, 0.8F, 600, 2400, 96.0F, 512.0F);
+    }
+
+    private static StormInstance newbornStorm(int id) {
+        return new StormInstance(id, WeatherRegistries.key("placeholder"), 0.0D, 160.0D, 0.0D, 0.0F, 0.0F, 1.0F, 0,
+            1000, 64.0F, 512.0F);
+    }
+
+    /** A weather type holder for a small vortex with a fixed intensity of 0.6 and a fixed life of 90 seconds. */
+    static KeyedHolder vortexHolder(String path) {
+        WeatherType type = new WeatherType(WeatherFamily.VORTEX, WeatherType.Range.of(0.6F), WeatherType.Climate.ANY,
+            WeatherType.Range.of(90.0F), 24.0F, 256.0F, 0, WeatherType.Visuals.NONE, PrecipitationMode.NONE,
+            Optional.empty(), WeatherType.DEFAULT_DIMENSIONS, true);
+        return new KeyedHolder(WeatherRegistries.key(path), type);
+    }
+
+    /** A tag with exactly the seventeen keys the second milestone wrote, before parents, hail and family state. */
+    private static CompoundTag secondMilestoneTag() {
+        CompoundTag tag = firstMilestoneTag();
+        tag.putBoolean("Natural", true);
+        tag.putInt("TicksUnseen", 300);
+        tag.putFloat("HeadingBias", -15.0F);
+        return tag;
     }
 
     /** A tag with exactly the keys the first milestone wrote, before the director's fields existed. */
@@ -94,6 +238,392 @@ class StormInstanceNbtTest {
         CompoundTag first = sampleStorm().save();
         CompoundTag second = StormInstance.load(first).save();
         assertEquals(first, second);
+        assertEquals(17, first.size(), "a storm without parent, hail and family state writes the old seventeen keys");
+        assertFalse(first.contains("Parent"));
+        assertFalse(first.contains("Hail"));
+        assertFalse(first.contains("Family"));
+    }
+
+    @Test
+    void secondMilestoneTagIsSavedBackUnchanged() {
+        CompoundTag tag = secondMilestoneTag();
+
+        StormInstance loaded = StormInstance.load(tag);
+
+        assertEquals(0, loaded.parentId(), "a storm saved before parents existed has none");
+        assertFalse(loaded.isChild());
+        assertEquals(0.0F, loaded.hail(), EPSILON);
+        assertEquals(tag, loaded.save(), "nothing is added to a tag of the second milestone");
+
+        CounterState state = loaded.familyState(CounterState.class, CounterState::load);
+        assertEquals(0, state.count, "a missing family tag loads the family's defaults");
+        assertEquals(tag, loaded.save(), "a family state at its defaults writes no key either");
+        assertFalse(loaded.isDirty(), "asking for the family state changes nothing a client sees");
+    }
+
+    @Test
+    void parentHailAndFamilyStateRoundTrip() {
+        CompoundTag tag = secondMilestoneTag();
+        tag.putInt("Parent", 7);
+        tag.putFloat("Hail", 0.35F);
+        CompoundTag family = new CompoundTag();
+        family.putInt("Count", 3);
+        tag.put("Family", family);
+
+        StormInstance loaded = StormInstance.load(tag);
+
+        assertEquals(7, loaded.parentId());
+        assertTrue(loaded.isChild());
+        assertEquals(0.35F, loaded.hail(), EPSILON);
+        assertFalse(loaded.isDirty());
+        assertEquals(tag, loaded.save(), "a storm whose family never asked for its state keeps the tag as loaded");
+
+        assertEquals(3, loaded.familyState(CounterState.class, CounterState::load).count);
+        assertEquals(tag, loaded.save(), "an unchanged typed state writes the same tag");
+        assertEquals(tag, StormInstance.load(loaded.save()).save());
+    }
+
+    @Test
+    void loadClampsABrokenParentAndHail() {
+        CompoundTag tag = secondMilestoneTag();
+        tag.putInt("Parent", -3);
+        tag.putFloat("Hail", 4.0F);
+        tag.putString("Family", "not a compound");
+
+        StormInstance loaded = StormInstance.load(tag);
+
+        assertEquals(0, loaded.parentId(), "a negative parent id means no parent");
+        assertEquals(1.0F, loaded.hail(), EPSILON, "hail is clamped to 0..1");
+        assertEquals(0, loaded.familyState(CounterState.class, CounterState::load).count,
+            "a family entry of the wrong tag type is ignored");
+    }
+
+    @Test
+    void familyStateIsCachedAndSavedFromTheCache() {
+        StormInstance storm = sampleStorm();
+
+        CounterState state = storm.familyState(CounterState.class, CounterState::load);
+        assertEquals(0, state.count);
+        assertSame(state, storm.familyState(CounterState.class, MUST_NOT_LOAD));
+
+        state.count = 5;
+        CompoundTag saved = storm.save();
+        assertEquals(5, saved.getCompound("Family").getInt("Count"), "save writes the cached state, not the old tag");
+        assertSame(state, storm.familyState(CounterState.class, MUST_NOT_LOAD), "saving keeps the cached state");
+        assertEquals(5, StormInstance.load(saved).familyState(CounterState.class, CounterState::load).count);
+
+        state.count = 6;
+        OtherState other = storm.familyState(OtherState.class, tag -> {
+            assertEquals(5, tag.getInt("Count"), "another class is loaded from the tag last saved");
+            return new OtherState();
+        });
+        assertSame(other, storm.familyState(OtherState.class, tag -> new OtherState()));
+        assertTrue(storm.save().getCompound("Family").getBoolean("Other"));
+
+        assertThrows(NullPointerException.class, () -> sampleStorm().familyState(CounterState.class, tag -> null),
+            "the family state is never null");
+    }
+
+    @Test
+    void retypeKeepsTheFamilyStateTheAgeAndTheLifetime() {
+        StormInstance storm = sampleStorm();
+        CounterState state = storm.familyState(CounterState.class, CounterState::load);
+        state.count = 9;
+        storm.clearDirty();
+        ResourceKey<WeatherType> grown = WeatherRegistries.key("tornado_ef2");
+
+        storm.retype(grown, 48.0F, 384.0F);
+
+        assertEquals(grown, storm.type());
+        assertEquals(grown.location(), storm.typeId());
+        assertEquals(48.0F, storm.radius(), EPSILON);
+        assertEquals(384.0F, storm.interestRadius(), EPSILON);
+        assertEquals(600, storm.ageTicks());
+        assertEquals(2400, storm.maxAgeTicks());
+        assertEquals(0.8F, storm.intensity(), EPSILON);
+        assertEquals(0.8F, storm.peakIntensity(), EPSILON);
+        assertSame(state, storm.familyState(CounterState.class, MUST_NOT_LOAD), "the family state survives the retype");
+        assertTrue(storm.isDirty());
+
+        CompoundTag saved = storm.save();
+        assertEquals("weathermod:tornado_ef2", saved.getString("Type"));
+        assertEquals(9, saved.getCompound("Family").getInt("Count"));
+        assertEquals(grown.location(), storm.toSnapshot().typeId());
+        assertEquals(48.0F, storm.toSnapshot().radius(), EPSILON);
+    }
+
+    @Test
+    void setFamilyTagDropsTheCachedState() {
+        StormInstance storm = sampleStorm();
+        CounterState first = storm.familyState(CounterState.class, CounterState::load);
+        first.count = 4;
+        CompoundTag prepared = new CompoundTag();
+        prepared.putInt("Count", 11);
+        storm.clearDirty();
+
+        storm.setFamilyTag(prepared);
+        prepared.putInt("Count", 99);
+
+        assertTrue(storm.isDirty());
+        CounterState second = storm.familyState(CounterState.class, CounterState::load);
+        assertNotSame(first, second);
+        assertEquals(11, second.count, "the storm keeps its own copy of the prepared tag");
+        assertEquals(11, storm.save().getCompound("Family").getInt("Count"));
+
+        storm.setFamilyTag(new CompoundTag());
+        assertFalse(storm.save().contains("Family"), "an empty family tag is not written");
+        assertEquals(0, storm.familyState(CounterState.class, CounterState::load).count);
+    }
+
+    @Test
+    void setMaxAgeTicksNeverGoesBelowTheNextTick() {
+        StormInstance storm = sampleStorm();
+        storm.clearDirty();
+
+        storm.setMaxAgeTicks(1200);
+        assertEquals(1200, storm.maxAgeTicks());
+        assertEquals(0.8F, storm.intensity(), EPSILON, "age 600 of 1200 is still on the plateau");
+        assertTrue(storm.isDirty());
+
+        storm.setMaxAgeTicks(100);
+        assertEquals(601, storm.maxAgeTicks(), "the lifetime is at least the age plus one tick");
+        assertFalse(storm.isExpired());
+        assertEquals(0.8F * StormInstance.lifeEnvelope(600, 601), storm.intensity(), EPSILON,
+            "the intensity follows the envelope of the new lifetime");
+
+        storm.setMaxAgeTicks(-5);
+        assertEquals(601, storm.maxAgeTicks());
+
+        storm.tick(new WindState(0.0F, 0.0F), 1.0F);
+        assertTrue(storm.isExpired(), "one more tick and the storm has lived out its life");
+    }
+
+    @Test
+    void tickWithSpeedLimitsClampsAnUnsteeredStormAndLeavesASteeredOne() {
+        StormInstance storm = newbornStorm(10);
+        WindState wind = new WindState(90.0F, 10.0F);
+
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(90.0F, storm.headingDegrees(), EPSILON);
+        assertEquals(3.0F, storm.speed(), EPSILON, "inside the limits the storm drifts as before");
+        assertEquals(0.15D, storm.x(), 1.0E-6D);
+        assertEquals(1, storm.ageTicks());
+
+        storm.tick(wind, 0.3F, 4.0F, 64.0F);
+        assertEquals(4.0F, storm.speed(), EPSILON, "a drift of 3 is raised to the minimum speed");
+        storm.tick(wind, 0.3F, 0.0F, 2.0F);
+        assertEquals(2.0F, storm.speed(), EPSILON, "a drift of 3 is cut to the maximum speed");
+        storm.tick(wind, 2.0F, 0.0F, 64.0F);
+        assertEquals(20.0F, storm.speed(), EPSILON, "a drift factor above one is allowed here");
+        storm.tick(wind, 9.0F, 0.0F, 64.0F);
+        assertEquals(10.0F * StormInstance.MAX_DRIFT_FACTOR, storm.speed(), EPSILON, "but clamped to the largest");
+        storm.tick(wind, -1.0F, 0.0F, 64.0F);
+        assertEquals(0.0F, storm.speed(), EPSILON, "a negative factor is clamped to zero");
+        storm.tick(wind, -1.0F, 1.5F, 64.0F);
+        assertEquals(1.5F, storm.speed(), EPSILON, "the minimum speed holds in calm air too");
+        storm.tick(wind, 0.3F, 8.0F, 2.0F);
+        assertEquals(8.0F, storm.speed(), EPSILON, "when the limits cross the lower one wins");
+        storm.tick(wind, 4.0F, 0.0F, 1000.0F);
+        assertEquals(40.0F, storm.speed(), EPSILON);
+        storm.tick(new WindState(90.0F, 16.0F), 4.0F, 100.0F, 1000.0F);
+        assertEquals(StormInstance.MAX_STEER_SPEED, storm.speed(), EPSILON, "no limit lifts a storm past the cap");
+        assertEquals(10, storm.ageTicks(), "every tick ages the storm by one");
+
+        storm.steer(0.0F, 20.0F);
+        storm.tick(wind, 0.3F, 0.0F, 2.0F);
+        assertEquals(0.0F, storm.headingDegrees(), EPSILON, "a steered storm ignores the wind");
+        assertEquals(20.0F, storm.speed(), EPSILON, "and the speed limits of its type");
+    }
+
+    @Test
+    void setMotionLeadsTheStormForExactlyOneTick() {
+        StormInstance storm = newbornStorm(11);
+        storm.setHeadingBias(20.0F);
+        WindState wind = new WindState(90.0F, 10.0F);
+        storm.clearDirty();
+
+        storm.setMotion(180.0F, 6.0F);
+        assertTrue(storm.isDirty());
+        assertEquals(180.0F, storm.headingDegrees(), EPSILON, "the heading is set at once for the next snapshot");
+        assertEquals(6.0F, storm.speed(), EPSILON);
+        assertEquals(0.0D, storm.z(), 0.0D, "but the storm only moves when it ticks");
+
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(180.0F, storm.headingDegrees(), EPSILON, "the request replaces the wind and the bias");
+        assertEquals(6.0F, storm.speed(), EPSILON);
+        assertEquals(0.0D, storm.x(), 1.0E-9D);
+        assertEquals(0.3D, storm.z(), 1.0E-6D, "6 blocks per second is 0.3 blocks per tick toward +Z");
+
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(110.0F, storm.headingDegrees(), EPSILON, "the following tick drifts with the wind again");
+        assertEquals(3.0F, storm.speed(), EPSILON);
+        assertTrue(storm.x() > 0.1D, "and moves the storm east with it");
+    }
+
+    @Test
+    void setMotionIsClampedToTheLimitsAndIsNotSaved() {
+        StormInstance storm = newbornStorm(12);
+        WindState wind = new WindState(90.0F, 10.0F);
+
+        storm.setMotion(0.0F, 30.0F);
+        storm.tick(wind, 0.3F, 0.0F, 12.0F);
+        assertEquals(0.0F, storm.headingDegrees(), EPSILON);
+        assertEquals(12.0F, storm.speed(), EPSILON, "a requested speed is cut to the maximum of the type");
+
+        storm.setMotion(0.0F, 1.0F);
+        storm.tick(wind, 0.3F, 2.5F, 12.0F);
+        assertEquals(2.5F, storm.speed(), EPSILON, "and raised to its minimum");
+
+        storm.setMotion(-90.0F, 1000.0F);
+        assertEquals(270.0F, storm.headingDegrees(), EPSILON, "the heading is wrapped into [0, 360)");
+        assertEquals(StormInstance.MAX_STEER_SPEED, storm.speed(), EPSILON);
+        storm.setMotion(45.0F, -3.0F);
+        assertEquals(0.0F, storm.speed(), EPSILON, "a negative speed is no speed");
+
+        storm.setMotion(180.0F, 6.0F);
+        StormInstance loaded = StormInstance.load(storm.save());
+        loaded.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(90.0F, loaded.headingDegrees(), EPSILON, "a pending request is not saved");
+        assertEquals(3.0F, loaded.speed(), EPSILON);
+
+        storm.tick(wind, 0.3F);
+        assertEquals(90.0F, storm.headingDegrees(), EPSILON, "the two-argument tick keeps its old behaviour");
+        assertEquals(3.0F, storm.speed(), EPSILON);
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(90.0F, storm.headingDegrees(), EPSILON, "and the request it passed over is gone");
+
+        storm.clearDirty();
+        storm.setMotion(Float.NaN, 5.0F);
+        storm.setMotion(10.0F, Float.POSITIVE_INFINITY);
+        assertFalse(storm.isDirty(), "a request that is not a finite number is ignored");
+        assertEquals(90.0F, storm.headingDegrees(), EPSILON);
+    }
+
+    @Test
+    void setMotionIsIgnoredWhileSteered() {
+        StormInstance storm = newbornStorm(13);
+        WindState wind = new WindState(90.0F, 10.0F);
+        storm.steer(0.0F, 4.0F);
+        storm.clearDirty();
+
+        storm.setMotion(180.0F, 9.0F);
+        assertFalse(storm.isDirty());
+        assertEquals(0.0F, storm.headingDegrees(), EPSILON);
+        assertEquals(4.0F, storm.speed(), EPSILON);
+
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(0.0F, storm.headingDegrees(), EPSILON);
+        assertEquals(4.0F, storm.speed(), EPSILON);
+
+        storm.releaseSteering();
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(90.0F, storm.headingDegrees(), EPSILON, "a request made while steered is not remembered");
+        assertEquals(3.0F, storm.speed(), EPSILON);
+
+        storm.setMotion(180.0F, 9.0F);
+        storm.steer(0.0F, 4.0F);
+        storm.releaseSteering();
+        storm.tick(wind, 0.3F, 0.0F, 64.0F);
+        assertEquals(90.0F, storm.headingDegrees(), EPSILON, "steering drops a request made before it");
+        assertEquals(3.0F, storm.speed(), EPSILON);
+    }
+
+    @Test
+    void setHailClampsAndMarksDirtyOnlyForVisibleChanges() {
+        StormInstance storm = sampleStorm();
+        assertEquals(0.0F, storm.hail(), EPSILON, "a new storm drops no hail");
+        storm.clearDirty();
+
+        storm.setHail(0.5F);
+        assertEquals(0.5F, storm.hail(), EPSILON);
+        assertTrue(storm.isDirty(), "hail that starts is synced");
+
+        storm.clearDirty();
+        storm.setHail(0.505F);
+        assertEquals(0.505F, storm.hail(), EPSILON, "a small change is still stored");
+        assertFalse(storm.isDirty(), "but a change of half a hundredth is not worth a sync");
+
+        storm.setHail(0.52F);
+        assertTrue(storm.isDirty(), "a change of more than a hundredth is");
+
+        storm.clearDirty();
+        storm.setHail(0.52F);
+        assertFalse(storm.isDirty(), "setting the strength it already has changes nothing");
+
+        storm.setHail(0.005F);
+        storm.clearDirty();
+        storm.setHail(0.0F);
+        assertTrue(storm.isDirty(), "hail that stops is synced however weak it was");
+
+        storm.clearDirty();
+        storm.setHail(0.004F);
+        assertTrue(storm.isDirty(), "and so is hail that starts however weak it is");
+
+        storm.setHail(7.0F);
+        assertEquals(1.0F, storm.hail(), EPSILON);
+        assertEquals(1.0F, storm.save().getFloat("Hail"), EPSILON);
+        assertEquals(1.0F, storm.toSnapshot().hail(), EPSILON, "the snapshot carries the hail strength");
+        storm.setHail(-1.0F);
+        assertEquals(0.0F, storm.hail(), EPSILON);
+        assertFalse(storm.save().contains("Hail"), "no hail, no key");
+        storm.setHail(0.3F);
+        storm.setHail(Float.NaN);
+        assertEquals(0.0F, storm.hail(), EPSILON, "a strength that is not a number is no hail");
+    }
+
+    @Test
+    void setPositionMovesTheCentre() {
+        StormInstance storm = sampleStorm();
+        storm.clearDirty();
+
+        storm.setPosition(-8.5D, 1024.0D);
+
+        assertEquals(-8.5D, storm.x());
+        assertEquals(1024.0D, storm.z());
+        assertEquals(160.0D, storm.y(), "the cloud base stays where it was");
+        assertTrue(storm.isDirty());
+    }
+
+    @Test
+    void createChildSetsTheParentAndIsNotNatural() {
+        KeyedHolder holder = vortexHolder("tornado_ef0");
+
+        StormInstance child = StormInstance.createChild(9, holder, 10.0D, -20.0D, 4, RandomSource.create(1L));
+
+        assertEquals(9, child.id());
+        assertEquals(4, child.parentId());
+        assertTrue(child.isChild());
+        assertFalse(child.isNatural(), "a child does not count toward the natural storm cap");
+        assertEquals(WeatherRegistries.key("tornado_ef0"), child.type());
+        assertEquals(10.0D, child.x());
+        assertEquals(-20.0D, child.z());
+        assertEquals(StormInstance.DEFAULT_CLOUD_BASE, child.y());
+        assertEquals(24.0F, child.radius(), EPSILON);
+        assertEquals(256.0F, child.interestRadius(), EPSILON);
+        assertEquals(0.6F, child.peakIntensity(), EPSILON);
+        assertEquals(1800, child.maxAgeTicks(), "90 seconds");
+        assertEquals(0, child.ageTicks());
+        assertEquals(0.0F, child.intensity(), EPSILON, "a child is not started at its peak");
+        assertTrue(child.isDirty());
+        assertEquals(4, child.save().getInt("Parent"));
+
+        StormSnapshot snapshot = child.toSnapshot();
+        assertEquals(9, snapshot.id());
+        assertEquals(4, snapshot.parentId(), "the snapshot carries the parent");
+        assertEquals(0.0F, snapshot.hail(), EPSILON);
+
+        StormInstance loaded = StormInstance.load(child.save());
+        assertEquals(4, loaded.parentId());
+        assertTrue(loaded.isChild());
+
+        StormInstance orphan = StormInstance.create(10, holder, 0.0D, 0.0D, RandomSource.create(1L));
+        assertEquals(0, orphan.parentId());
+        assertFalse(orphan.isChild());
+        assertFalse(orphan.save().contains("Parent"), "no parent, no key");
+        assertEquals(0, orphan.toSnapshot().parentId());
+
+        StormInstance broken = StormInstance.createChild(11, holder, 0.0D, 0.0D, -2, RandomSource.create(1L));
+        assertFalse(broken.isChild(), "a negative parent id means no parent");
     }
 
     @Test

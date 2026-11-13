@@ -1,6 +1,9 @@
 package com.weathermod.client;
 
 import com.weathermod.network.ClimateUpdatePayload;
+import com.weathermod.network.DownburstPayload;
+import com.weathermod.network.FunnelSpinePayload;
+import com.weathermod.network.LightningStrikePayload;
 import com.weathermod.network.StormDeltaPayload;
 import com.weathermod.network.StormListPayload;
 import com.weathermod.network.StormRemovedPayload;
@@ -38,6 +41,21 @@ public final class ClientPayloadHandler {
 
     /** Stores the climate at the player. */
     public static void handleClimateUpdate(ClimateUpdatePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> ClientWeatherState.INSTANCE.apply(payload));
+    }
+
+    /** Creates or updates the funnel of a storm the client knows. */
+    public static void handleFunnelSpine(FunnelSpinePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> ClientWeatherState.INSTANCE.apply(payload));
+    }
+
+    /** Remembers a lightning strike and tells the strike listener. */
+    public static void handleLightningStrike(LightningStrikePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> ClientWeatherState.INSTANCE.apply(payload));
+    }
+
+    /** Starts mirroring a downburst. */
+    public static void handleDownburst(DownburstPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> ClientWeatherState.INSTANCE.apply(payload));
     }
 }

@@ -1,6 +1,6 @@
 # Asset generators
 
-Every texture and sound the mod ships is produced by the two scripts in this directory. Nothing is drawn,
+Every texture and sound the mod ships is produced by the scripts in this directory. Nothing is drawn,
 recorded, sampled, copied or traced from any game or mod: the images come from fixed-seed noise and simple
 analytic shapes, the sounds from filtered noise and short decaying sines. The scripts are committed next to their
 outputs, so a change to a texture or a loop is made by editing the script and rerunning it, never by editing a
@@ -76,3 +76,33 @@ file, the five expected sound events are present and the PNGs have the sizes the
 the particle sprites: the dust and leaf sprites, which are drawn without blending, must be all-or-nothing in
 alpha and solid enough to be seen, and the haze sprites must peak at the centre alpha the haze particle assumes.
 It runs with the rest of the unit tests (`./gradlew test`).
+
+## Block textures
+
+`generate_block_textures.py` (the textures of the tornado siren and the weather deflector; needs `numpy` and
+`Pillow` only, takes no input files):
+
+```
+python3 tools/assets/generate_block_textures.py
+```
+
+Like the other scripts it writes straight into `src/main/resources/assets/weathermod/` (pass `--out DIR` to write
+somewhere else) and prints the size and mode of every PNG it wrote. Every texture has its own random stream derived
+from the script's master seed (20240921), so a rerun reproduces the committed files and editing one texture never
+changes another. The block models are plain cubes (`minecraft:block/cube_bottom_top`) drawn without blending, so
+every texel is fully opaque.
+
+| File | Size | Content |
+| --- | --- | --- |
+| `textures/block/tornado_siren_side.png` | 16x16 | a grey steel plate with a lit rim and four rivets, a dark horn grille of three slats (8 x 6 texels inside its housing) and above it a lamp band of dark unlit glass, 12 x 2 texels |
+| `textures/block/tornado_siren_side_active.png` | 16x16 | the same plate, texel for texel (both are painted from one random stream), with the lamp band lit red, a glint on it and a red glow on the row of steel above and below it; used while the siren sounds |
+| `textures/block/tornado_siren_top.png` | 16x16 | a steel plate with the round mouth of the horn (a dark core inside a light rim) and four rivets; also the bottom of the block |
+| `textures/block/weather_deflector_side.png` | 16x16 | oxidised copper (verdigris with patches of barer, browner metal from low-frequency noise) with a pale ring 4.2 to 5.6 texels from the middle, a shaded groove inside it and a pale stud in the middle |
+| `textures/block/weather_deflector_top.png` | 16x16 | oxidised copper with two pale rings (2.4 to 3.6 and 5.3 to 6.6 texels from the middle) around a dark core; also the bottom of the block |
+
+The blockstate, model, loot table, recipe and tag files of the two blocks are written by hand, not generated.
+`src/test/java/com/weathermod/block/BlockResourceTest.java` reads all of them from the classpath and checks that
+every blockstate names a model that exists, every model names textures that exist and are 16 x 16 RGBA, the five
+textures are fully opaque, the active side of the siren is the silent one with a red lamp, the loot tables and
+recipes name the right ids, and both blocks are listed in `minecraft:mineable/pickaxe` and
+`minecraft:needs_stone_tool`.

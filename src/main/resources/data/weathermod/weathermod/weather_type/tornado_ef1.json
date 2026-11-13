@@ -1,0 +1,38 @@
+{
+  "family": "vortex",
+  "intensity": {
+    "min": 0.8,
+    "max": 1.0
+  },
+  "duration_seconds": {
+    "min": 120.0,
+    "max": 240.0
+  },
+  "radius": 36.0,
+  "interest_radius": 640.0,
+  "weight": 0,
+  "visuals": {
+    "rain_level": 0.0,
+    "thunder_level": 0.0,
+    "haze_strength": 0.3
+  },
+  "precipitation": "none",
+  "severe": true,
+  "vortex": {
+    "kind": "tornado",
+    "tier": 1,
+    "core_radius": 5.0,
+    "top_radius": 16.0,
+    "influence_radius": 36.0,
+    "wind_speed": 13.0,
+    "pull": 0.057,
+    "lift": 0.07,
+    "rise_cap": 0.2,
+    "eject_height": 8.0,
+    "rip_share": 0.25,
+    "flying_block_share": 0.25,
+    "throw_speed": 9.0,
+    "min_speed": 0.8,
+    "max_speed": 3.3
+  }
+}

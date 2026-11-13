@@ -8,8 +8,9 @@ import net.minecraft.util.RandomSource;
 import org.junit.jupiter.api.Test;
 
 /**
- * Checks the upwind placement band, the sideways jitter and the bounded heading bias of the spawn planner. Needs
- * no Minecraft bootstrap: only {@code RandomSource} and plain trigonometry are involved.
+ * Checks the upwind placement band, the sideways jitter, the near placement of small vortices and the bounded
+ * heading bias of the spawn planner. Needs no Minecraft bootstrap: only {@code RandomSource} and plain
+ * trigonometry are involved.
  */
 class SpawnPlannerTest {
     private static final float EPSILON = 1.0E-4F;
@@ -92,7 +93,8 @@ class SpawnPlannerTest {
                 double across = plan.x() * sideX + plan.z() * sideZ;
                 assertTrue(along >= 0.55D * RADIUS - 1.0E-6D, "wind " + wind + " placed the storm too close: " + along);
                 assertTrue(along <= 0.80D * RADIUS + 1.0E-6D, "wind " + wind + " placed the storm too far: " + along);
-                assertTrue(Math.abs(across) <= 0.3D * RADIUS + 1.0E-6D, "wind " + wind + " jittered too far: " + across);
+                assertTrue(Math.abs(across) <= 0.3D * RADIUS + 1.0E-6D,
+                    "wind " + wind + " jittered too far: " + across);
                 assertEquals(Headings.wrapDegrees(wind), plan.headingDegrees(), EPSILON);
             }
         }
@@ -155,7 +157,8 @@ class SpawnPlannerTest {
         assertEquals(20.0F, SpawnPlanner.signedDifference(350.0F, 10.0F), EPSILON);
         assertEquals(-20.0F, SpawnPlanner.signedDifference(10.0F, 350.0F), EPSILON);
         assertEquals(0.0F, SpawnPlanner.signedDifference(90.0F, 450.0F), EPSILON);
-        assertEquals(-180.0F, SpawnPlanner.signedDifference(0.0F, 180.0F), EPSILON, "opposite headings give -180, never 180");
+        assertEquals(-180.0F, SpawnPlanner.signedDifference(0.0F, 180.0F), EPSILON,
+            "opposite headings give -180, never 180");
         assertEquals(90.0F, SpawnPlanner.signedDifference(0.0F, 90.0F), EPSILON);
         assertEquals(-90.0F, SpawnPlanner.signedDifference(0.0F, 270.0F), EPSILON);
     }
@@ -193,5 +196,112 @@ class SpawnPlannerTest {
             "a zero limit allows no turn");
         assertEquals(20.0F, SpawnPlanner.biasHeading(0.0F, 0.0D, 0.0D, 100.0D, 0.0D, -20.0F), EPSILON,
             "a negative limit is read as its magnitude");
+    }
+
+    @Test
+    void nearVortexConstantsAgreeWithTheDesign() {
+        assertEquals(24.0D, SpawnPlanner.NEAR_VORTEX_MIN_BLOCKS);
+        assertEquals(64.0D, SpawnPlanner.NEAR_VORTEX_MAX_BLOCKS);
+        assertEquals(8.0D, SpawnPlanner.NEAR_VORTEX_EDGE_MARGIN_BLOCKS);
+        assertEquals(0.3D, SpawnPlanner.NEAR_VORTEX_LATERAL_FRACTION);
+    }
+
+    @Test
+    void nearUpwindStaysWithinSightAndClearOfTheVortexField() {
+        RandomSource random = RandomSource.create(77L);
+        for (float influence : new float[] {8.0F, 12.0F, 24.0F}) {
+            for (int step = 0; step < 72; step++) {
+                float wind = step * 5.0F;
+                double upwindX = Headings.directionX(wind + 180.0F);
+                double upwindZ = Headings.directionZ(wind + 180.0F);
+                double sideX = Headings.directionX(wind + 90.0F);
+                double sideZ = Headings.directionZ(wind + 90.0F);
+
+                for (int i = 0; i < 20; i++) {
+                    SpawnPlanner.Plan plan = SpawnPlanner.nearUpwind(100.0D, -40.0D, wind, influence, random);
+
+                    double dx = plan.x() - 100.0D;
+                    double dz = plan.z() + 40.0D;
+                    double along = dx * upwindX + dz * upwindZ;
+                    double across = dx * sideX + dz * sideZ;
+                    String where = "influence " + influence + ", wind " + wind + ": " + along + " / " + across;
+                    assertTrue(along >= 24.0D - 1.0E-6D, "too close upwind, " + where);
+                    assertTrue(along <= 64.0D + 1.0E-6D, "too far upwind, " + where);
+                    assertTrue(along >= influence + 8.0D - 1.0E-6D, "inside the field plus its margin, " + where);
+                    assertTrue(Math.abs(across) <= 0.3D * along + 1.0E-6D, "pushed too far sideways, " + where);
+                    assertTrue(Math.hypot(dx, dz) > influence, "the field reaches the anchor at birth, " + where);
+                    assertEquals(Headings.wrapDegrees(wind), plan.headingDegrees(), EPSILON);
+                }
+            }
+        }
+    }
+
+    @Test
+    void nearUpwindUsesTheWholeBandAndBothSides() {
+        RandomSource random = RandomSource.create(2025L);
+        double nearest = Double.POSITIVE_INFINITY;
+        double farthest = 0.0D;
+        double leftmost = 0.0D;
+        double rightmost = 0.0D;
+        for (int i = 0; i < 2000; i++) {
+            SpawnPlanner.Plan plan = SpawnPlanner.nearUpwind(0.0D, 0.0D, 0.0F, 8.0F, random);
+            double south = plan.z();
+            nearest = Math.min(nearest, south);
+            farthest = Math.max(farthest, south);
+            leftmost = Math.min(leftmost, plan.x());
+            rightmost = Math.max(rightmost, plan.x());
+        }
+        assertTrue(nearest >= 24.0D - 1.0E-6D && nearest < 26.0D, "the near end is used, nearest was " + nearest);
+        assertTrue(farthest <= 64.0D + 1.0E-6D && farthest > 62.0D, "the far end is used, farthest was " + farthest);
+        assertTrue(leftmost < -12.0D, "vortices form to the west of a north wind, leftmost was " + leftmost);
+        assertTrue(rightmost > 12.0D, "vortices form to the east of a north wind, rightmost was " + rightmost);
+    }
+
+    @Test
+    void nearUpwindKeepsALargeVortexBeyondItsOwnField() {
+        SpawnPlanner.Plan large = SpawnPlanner.nearUpwind(0.0D, 0.0D, 90.0F, 96.0F, RandomSource.create(1L));
+        assertEquals(104.0D, -large.x(), 1.0E-6D, "a lower bound above the upper one is used alone");
+        assertTrue(Math.abs(large.z()) <= 0.3D * 104.0D + 1.0E-6D);
+        assertEquals(90.0F, large.headingDegrees(), EPSILON);
+
+        SpawnPlanner.Plan edge = SpawnPlanner.nearUpwind(0.0D, 0.0D, 90.0F, 56.0F, RandomSource.create(1L));
+        assertEquals(64.0D, -edge.x(), 1.0E-6D, "influence 56 plus the margin is exactly the far end");
+
+        for (float influence : new float[] {-100.0F, 0.0F, Float.NaN}) {
+            RandomSource random = RandomSource.create(4L);
+            for (int i = 0; i < 100; i++) {
+                double west = -SpawnPlanner.nearUpwind(0.0D, 0.0D, 90.0F, influence, random).x();
+                assertTrue(west >= 24.0D - 1.0E-6D && west <= 64.0D + 1.0E-6D,
+                    "influence " + influence + " counts as none: " + west);
+            }
+        }
+
+        SpawnPlanner.Plan wrapped = SpawnPlanner.nearUpwind(0.0D, 0.0D, 450.0F, 8.0F, RandomSource.create(1L));
+        assertEquals(90.0F, wrapped.headingDegrees(), EPSILON, "the heading is wrapped into [0, 360)");
+    }
+
+    @Test
+    void nearUpwindReadsTheRandomSourceTwice() {
+        for (float influence : new float[] {8.0F, 96.0F}) {
+            RandomSource used = RandomSource.create(31L);
+            RandomSource twin = RandomSource.create(31L);
+
+            SpawnPlanner.nearUpwind(0.0D, 0.0D, 45.0F, influence, used);
+            twin.nextFloat();
+            twin.nextFloat();
+
+            assertEquals(twin.nextLong(), used.nextLong(),
+                "exactly two reads for influence " + influence + ", also when the band has no width");
+        }
+
+        RandomSource twin = RandomSource.create(9L);
+        float first = twin.nextFloat();
+        float second = twin.nextFloat();
+        SpawnPlanner.Plan plan = SpawnPlanner.nearUpwind(0.0D, 0.0D, 90.0F, 8.0F, RandomSource.create(9L));
+        double distance = 24.0D + (64.0D - 24.0D) * first;
+        assertEquals(-distance, plan.x(), 1.0E-6D, "the first read picks the distance");
+        assertEquals(distance * 0.3D * (second * 2.0F - 1.0F), plan.z(), 1.0E-6D, "the second the sideways offset");
+        assertEquals(plan, SpawnPlanner.nearUpwind(0.0D, 0.0D, 90.0F, 8.0F, RandomSource.create(9L)),
+            "the plan is deterministic for a seed");
     }
 }

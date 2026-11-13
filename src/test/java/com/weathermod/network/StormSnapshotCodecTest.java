@@ -178,4 +178,156 @@ class StormSnapshotCodecTest {
             assertEquals("weathermod", id.getNamespace());
         }
     }
+
+    @Test
+    void detailRoundTripsThroughTheSnapshotCodec() {
+        StormSnapshot snapshot = sampleSnapshot(42).withDetail(new StormSnapshot.StormDetail(12, 0.75F));
+        ByteBuf buffer = Unpooled.buffer();
+
+        StormSnapshot.STREAM_CODEC.encode(buffer, snapshot);
+        StormSnapshot decoded = StormSnapshot.STREAM_CODEC.decode(buffer);
+
+        assertEquals(snapshot, decoded);
+        assertEquals(12, decoded.parentId());
+        assertEquals(0.75F, decoded.hail(), EPSILON);
+        assertEquals(new StormSnapshot.StormDetail(12, 0.75F), decoded.detail());
+        assertEquals(0, buffer.readableBytes(), "the codec must consume exactly what it wrote");
+    }
+
+    @Test
+    void detailCodecWritesAVarIntAndAFloat() {
+        ByteBuf none = Unpooled.buffer();
+        StormSnapshot.StormDetail.STREAM_CODEC.encode(none, StormSnapshot.StormDetail.NONE);
+        assertEquals(5, none.readableBytes(), "a one-byte parent id and a four-byte hail strength");
+        assertEquals(StormSnapshot.StormDetail.NONE, StormSnapshot.StormDetail.STREAM_CODEC.decode(none));
+        assertEquals(0, none.readableBytes());
+
+        StormSnapshot.StormDetail child = new StormSnapshot.StormDetail(300, 0.5F);
+        ByteBuf buffer = Unpooled.buffer();
+        StormSnapshot.StormDetail.STREAM_CODEC.encode(buffer, child);
+        assertEquals(6, buffer.readableBytes(), "a parent id of 300 takes two bytes as a var int");
+        assertEquals(child, StormSnapshot.StormDetail.STREAM_CODEC.decode(buffer));
+        assertEquals(0, buffer.readableBytes());
+
+        ByteBuf plain = Unpooled.buffer();
+        ByteBuf detailed = Unpooled.buffer();
+        StormSnapshot.STREAM_CODEC.encode(plain, sampleSnapshot(1));
+        StormSnapshot.STREAM_CODEC.encode(detailed, sampleSnapshot(1).withDetail(child));
+        assertEquals(plain.readableBytes() + 1, detailed.readableBytes(),
+            "the detail is the last thing on the wire and only the longer parent id adds a byte");
+    }
+
+    @Test
+    void flatAndThreePartConstructorsCarryNoDetail() {
+        StormSnapshot flat = sampleSnapshot(7);
+        assertSame(StormSnapshot.StormDetail.NONE, flat.detail(), "the twelve-argument constructor has no detail");
+        assertEquals(0, flat.parentId());
+        assertEquals(0.0F, flat.hail(), EPSILON);
+
+        StormSnapshot nested = new StormSnapshot(flat.identity(), flat.motion(), flat.life());
+        assertSame(StormSnapshot.StormDetail.NONE, nested.detail(), "the three-part constructor has no detail");
+        assertEquals(flat, nested);
+
+        assertEquals(0, StormSnapshot.StormDetail.NONE.parentId());
+        assertEquals(0.0F, StormSnapshot.StormDetail.NONE.hail(), EPSILON);
+        assertEquals(new StormSnapshot.StormDetail(0, 0.0F), StormSnapshot.StormDetail.NONE);
+    }
+
+    @Test
+    void withDetailReplacesOnlyTheDetail() {
+        StormSnapshot plain = sampleSnapshot(7);
+        StormSnapshot.StormDetail detail = new StormSnapshot.StormDetail(3, 0.4F);
+
+        StormSnapshot detailed = plain.withDetail(detail);
+
+        assertSame(plain.identity(), detailed.identity());
+        assertSame(plain.motion(), detailed.motion());
+        assertSame(plain.life(), detailed.life());
+        assertSame(detail, detailed.detail());
+        assertEquals(3, detailed.parentId());
+        assertEquals(0.4F, detailed.hail(), EPSILON);
+        assertEquals(0, plain.parentId(), "the original snapshot is left alone");
+        assertEquals(new StormSnapshot(plain.identity(), plain.motion(), plain.life(), detail), detailed);
+        assertFalse(plain.equals(detailed), "two snapshots that differ only in their detail are different");
+    }
+
+    @Test
+    void nullDetailIsRejected() {
+        StormSnapshot snapshot = sampleSnapshot(1);
+        assertThrows(NullPointerException.class,
+            () -> new StormSnapshot(snapshot.identity(), snapshot.motion(), snapshot.life(), null));
+        assertThrows(NullPointerException.class, () -> snapshot.withDetail(null));
+    }
+
+    @Test
+    void stormPayloadsCarryTheDetail() {
+        StormSnapshot child = sampleSnapshot(9).withDetail(new StormSnapshot.StormDetail(4, 0.0F));
+        StormSnapshot hailing = sampleSnapshot(4).withDetail(new StormSnapshot.StormDetail(0, 0.625F));
+
+        RegistryFriendlyByteBuf deltaBuffer = registryBuffer();
+        StormDeltaPayload.STREAM_CODEC.encode(deltaBuffer, new StormDeltaPayload(child));
+        StormDeltaPayload delta = StormDeltaPayload.STREAM_CODEC.decode(deltaBuffer);
+        assertEquals(4, delta.storm().parentId());
+        assertEquals(0, deltaBuffer.readableBytes());
+
+        RegistryFriendlyByteBuf listBuffer = registryBuffer();
+        StormListPayload.STREAM_CODEC.encode(listBuffer, new StormListPayload(List.of(child, hailing)));
+        StormListPayload list = StormListPayload.STREAM_CODEC.decode(listBuffer);
+        assertEquals(List.of(child, hailing), list.storms());
+        assertEquals(0.625F, list.storms().get(1).hail(), EPSILON);
+        assertEquals(0, listBuffer.readableBytes());
+    }
+
+    @Test
+    void lightningStrikePayloadRoundTrips() {
+        LightningStrikePayload payload = new LightningStrikePayload(-1234.5D, 71.0625D, 987.25D, 0.85F);
+        RegistryFriendlyByteBuf buffer = registryBuffer();
+
+        LightningStrikePayload.STREAM_CODEC.encode(buffer, payload);
+        assertEquals(28, buffer.readableBytes(), "three doubles and a float");
+        LightningStrikePayload decoded = LightningStrikePayload.STREAM_CODEC.decode(buffer);
+
+        assertEquals(payload, decoded);
+        assertEquals(-1234.5D, decoded.x());
+        assertEquals(71.0625D, decoded.y());
+        assertEquals(987.25D, decoded.z());
+        assertEquals(0.85F, decoded.power(), EPSILON);
+        assertEquals(0, buffer.readableBytes());
+        assertSame(LightningStrikePayload.TYPE, decoded.type());
+        assertEquals(1024.0D, LightningStrikePayload.RANGE_BLOCKS);
+    }
+
+    @Test
+    void downburstPayloadRoundTrips() {
+        DownburstPayload payload = new DownburstPayload(300.5D, -42.75D, 24.0F, 20.0F, 100);
+        RegistryFriendlyByteBuf buffer = registryBuffer();
+
+        DownburstPayload.STREAM_CODEC.encode(buffer, payload);
+        assertEquals(25, buffer.readableBytes(), "two doubles, two floats and a one-byte duration");
+        DownburstPayload decoded = DownburstPayload.STREAM_CODEC.decode(buffer);
+
+        assertEquals(payload, decoded);
+        assertEquals(300.5D, decoded.x());
+        assertEquals(-42.75D, decoded.z());
+        assertEquals(24.0F, decoded.radius(), EPSILON);
+        assertEquals(20.0F, decoded.speed(), EPSILON);
+        assertEquals(100, decoded.durationTicks());
+        assertEquals(0, buffer.readableBytes());
+        assertSame(DownburstPayload.TYPE, decoded.type());
+        assertEquals(96.0D, DownburstPayload.NOTIFY_MARGIN_BLOCKS);
+    }
+
+    @Test
+    void newPayloadTypeIdsAreDistinctFromEachOtherAndFromTheOldOnes() {
+        assertEquals(ResourceLocation.fromNamespaceAndPath("weathermod", "funnel_spine"),
+            FunnelSpinePayload.TYPE.id());
+        assertEquals(ResourceLocation.fromNamespaceAndPath("weathermod", "lightning_strike"),
+            LightningStrikePayload.TYPE.id());
+        assertEquals(ResourceLocation.fromNamespaceAndPath("weathermod", "downburst"), DownburstPayload.TYPE.id());
+
+        List<ResourceLocation> ids = List.of(StormListPayload.TYPE.id(), StormDeltaPayload.TYPE.id(),
+            StormRemovedPayload.TYPE.id(), WindUpdatePayload.TYPE.id(), ClimateUpdatePayload.TYPE.id(),
+            FunnelSpinePayload.TYPE.id(), LightningStrikePayload.TYPE.id(), DownburstPayload.TYPE.id());
+        assertEquals(ids.size(), ids.stream().distinct().count());
+    }
 }
