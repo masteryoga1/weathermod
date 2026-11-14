@@ -13,6 +13,7 @@ import com.weathermod.core.TriggerContext;
 import com.weathermod.core.WeatherFamily;
 import com.weathermod.core.WeatherType;
 import com.weathermod.server.climate.ClimateSample;
+import com.weathermod.server.family.FamilySystems;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -316,6 +317,8 @@ class TypeSelectorTest {
     void theFourFamiliesWithASystemAreEligible() {
         TaggedBiome anywhere = new TaggedBiome(Set.of());
         assertEquals(4, SUPPORTED.size());
+        assertEquals(SUPPORTED, FamilySystems.supported(),
+            "the registry hands the director exactly the families this test calls supported");
         for (WeatherFamily family : WeatherFamily.values()) {
             WeatherType type = type(family, 10, true, WeatherType.Climate.ANY, Optional.empty(),
                 WeatherType.DEFAULT_DIMENSIONS);

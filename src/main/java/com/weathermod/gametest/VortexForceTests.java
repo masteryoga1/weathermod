@@ -81,7 +81,7 @@ final class VortexForceTests {
     }
 
     /**
-     * A cow that an EF2 has carried six blocks up is dropped by removing the tornado. What the landing costs it
+     * A cow that an EF3 has carried six blocks up is dropped by removing the tornado. What the landing costs it
      * follows {@code tornadoFallDamage}: nothing with {@code NONE}, health with {@code FULL}.
      */
     static void fallAfterVortex(GameTestHelper helper, FallDamageMode mode, boolean expectHurt) {
@@ -92,11 +92,17 @@ final class VortexForceTests {
         double floorY = cow.getY();
         float full = cow.getHealth();
         Vec3 centre = bed.centre();
-        StormInstance storm = bed.spawnStorm("tornado_ef2", centre.x, centre.z, 1.0F);
+        // The ride has to reach the drop height every time. In the calm middle of an EF2 the lift is weaker than
+        // gravity, so a cow that the pull draws through the wall before it has risen six blocks comes down there
+        // and stays on the ground. An EF3 at full strength lifts more than gravity takes everywhere inside its
+        // lift radius, in the middle too, wherever the wandering foot of the funnel stands.
+        StormInstance storm = bed.spawnStorm("tornado_ef3", centre.x, centre.z, 1.0F);
         storm.steer(0.0F, 0.0F);
         int id = storm.id();
         boolean[] dropped = {false};
+        double[] highest = {0.0};
         bed.eachTick(() -> {
+            highest[0] = Math.max(highest[0], cow.getY() - floorY);
             if (!dropped[0] && cow.getY() - floorY >= DROP_HEIGHT_BLOCKS) {
                 bed.expect(cow.getHealth() == full, "The ride itself hurt the cow: " + cow.getHealth());
                 bed.expect(WeatherManager.remove(bed.level, id), "The tornado was already gone");
@@ -104,8 +110,15 @@ final class VortexForceTests {
             }
         });
         bed.succeedWhen(() -> {
+            ActiveVortex vortex = bed.data.runtime().vortex(id);
             bed.expect(dropped[0], "The cow has not been carried " + DROP_HEIGHT_BLOCKS + " blocks up, it is "
-                + (cow.getY() - floorY) + " blocks above the floor");
+                + (cow.getY() - floorY) + " blocks above the floor after " + helper.getTick() + " ticks and was "
+                + highest[0] + " blocks up at most; it stands at " + cow.position()
+                + (cow.isAlive() ? "" : " dead") + (bed.level.isPositionEntityTicking(cow.blockPosition())
+                    ? "" : " where entities do not tick") + ", the storm at " + storm.x() + ", " + storm.z()
+                + ", funnel " + (vortex == null ? "none" : "foot " + vortex.spine().groundY() + " grounded "
+                    + vortex.spine().grounded() + " acts " + vortex.actsOnWorld() + " base " + vortex.baseX()
+                    + ", " + vortex.baseZ()));
             bed.expect(cow.onGround() || !cow.isAlive(), "The cow is still falling");
             float lost = cow.isAlive() ? full - cow.getHealth() : full;
             if (expectHurt) {

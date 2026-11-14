@@ -19,7 +19,10 @@ import net.minecraft.world.level.block.BaseFireBlock;
  * and is left alone. Positions are kept in the order they were added.
  */
 public final class TemporaryFires {
-    /** Fires remembered at once; a fire lit while the list is full is not lit at all by the caller. */
+    /**
+     * Fires remembered at once; a fire lit while the list is full of fires that still burn is not lit at all by
+     * the caller.
+     */
     public static final int MAX_TEMPORARY_FIRES = 64;
     /** Ticks a remembered fire burns before it is removed. */
     public static final int LIFE_TICKS = 200;
@@ -34,15 +37,37 @@ public final class TemporaryFires {
     public TemporaryFires() {
     }
 
-    /** Registers a position with {@link #LIFE_TICKS} left; false when full or already listed. */
+    /**
+     * Registers a position with {@link #LIFE_TICKS} left; false when it is already listed or the list is full of
+     * fires that still burn.
+     *
+     * <p>A full list makes room by forgetting its oldest entry whose time is over, if it has one. Such an entry
+     * only waits for its chunk to be loaded again, and without this the leftovers of fires in chunks nobody
+     * returns to would fill the list for good and no fire could be lit any more. The price: the forgotten fire is
+     * no longer put out when its chunk comes back and burns on like any fire on such a block.
+     */
     public boolean add(BlockPos pos) {
         Objects.requireNonNull(pos, "pos");
         long key = pos.asLong();
-        if (left.size() >= MAX_TEMPORARY_FIRES || left.containsKey(key)) {
+        if (left.containsKey(key)) {
+            return false;
+        }
+        if (left.size() >= MAX_TEMPORARY_FIRES && !forgetOldestDue()) {
             return false;
         }
         left.put(key, LIFE_TICKS);
         return true;
+    }
+
+    /** Drops the first entry, in the order of registration, that has no ticks left; false when there is none. */
+    private boolean forgetOldestDue() {
+        for (long key : left.keySet().toLongArray()) {
+            if (left.get(key) == 0) {
+                left.remove(key);
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Forgets a position; does nothing when it is not listed. */
@@ -87,7 +112,8 @@ public final class TemporaryFires {
     /**
      * Advances the list by one tick and puts out what is due: every due position whose chunk and neighbouring
      * columns are loaded is dropped from the list, and its block removed with {@code level.removeBlock(pos, false)}
-     * when it is still a fire. Due positions that are not loaded stay listed and are tried again every tick.
+     * when it is still a fire. Due positions that are not loaded stay listed and are tried again every tick, until
+     * {@link #add} needs their place.
      *
      * @param level the level the fires burn in
      */

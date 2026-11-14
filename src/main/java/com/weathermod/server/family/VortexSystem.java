@@ -80,8 +80,8 @@ public final class VortexSystem implements FamilySystem {
         seed(state, context.random());
         float descent = VortexMath.descent(storm.intensity(), storm.ageTicks(), state.touchdownDelayTicks);
         grow(storm, params, state, descent, context.level());
-        followParent(storm, type, params, state, context.data());
-        avoidDeflectors(storm, params, context.data());
+        boolean led = followParent(storm, type, params, state, context.data());
+        avoidDeflectors(storm, params, led, context);
         trackGround(storm, params, state, context);
         ActiveVortex vortex = publish(storm, params, state, descent, context);
 
@@ -142,30 +142,34 @@ public final class VortexSystem implements FamilySystem {
 
     /**
      * Step 3: a child that follows its parent is led toward its anchor on the parent's flank with a motion request
-     * for the next tick; it is never moved directly. A child whose parent is gone, or has left it more than a
-     * parent radius behind, starts to fade out, once.
+     * for the next tick; it is never moved directly. The requested speed is kept within the child type's own
+     * limits, so the speed the storm shows until that tick is the speed it will move at. A child whose parent is
+     * gone, or has left it more than a parent radius behind, starts to fade out, once.
+     *
+     * @return whether a motion was requested for the next tick
      */
-    private static void followParent(StormInstance storm, WeatherType type, VortexParams params, VortexState state,
-                                     DimensionWeatherData data) {
+    private static boolean followParent(StormInstance storm, WeatherType type, VortexParams params,
+                                        VortexState state, DimensionWeatherData data) {
         if (!storm.isChild() || !params.kind().followsParent() || storm.isSteered()) {
-            return;
+            return false;
         }
         Optional<StormInstance> found = data.find(storm.parentId());
         if (found.isEmpty()) {
             orphan(storm, state);
-            return;
+            return false;
         }
         StormInstance parent = found.get();
         double[] anchor = new double[2];
         VortexMath.tornadoAnchor(parent.x(), parent.z(), parent.headingDegrees(), parent.radius(), anchor);
         if (!state.orphaned && VortexMath.lostParent(storm.x(), storm.z(), anchor[0], anchor[1], parent.radius())) {
             orphan(storm, state);
-            return;
+            return false;
         }
         float[] motion = new float[2];
         VortexMath.childMotion(storm.x(), storm.z(), storm.headingDegrees(), anchor[0], anchor[1],
             parent.headingDegrees(), parent.speed(), parent.radius(), type.maxSpeed(), motion);
-        storm.setMotion(motion[0], motion[1]);
+        storm.setMotion(motion[0], Mth.clamp(motion[1], type.minSpeed(), type.maxSpeed()));
+        return true;
     }
 
     /** Lets a child that lost its parent rope out instead of vanishing; does nothing the second time. */
@@ -178,14 +182,24 @@ public final class VortexSystem implements FamilySystem {
 
     /**
      * Step 4: keeps the lifting core out of every weather deflector's circle and turns an unsteered vortex that
-     * heads into one onto the tangent, at its own speed. A steered vortex is held out by the push alone.
+     * heads into one onto the tangent, at its own speed. A steered vortex is held out by the push alone. A listed
+     * deflector whose block is gone from a loaded chunk is dropped from the index first and steers nothing.
+     *
+     * <p>The heading that is tested is the one the next tick would take: the leash request of step 3 when there is
+     * one, otherwise the wind direction turned by the storm's heading bias. A motion request lasts one tick, so
+     * the storm's own heading is the tangent of the last request while it slides and no longer points into the
+     * circle; testing that would let the wind steer every other tick.
+     *
+     * @param led whether step 3 requested a motion for the next tick
      */
-    private static void avoidDeflectors(StormInstance storm, VortexParams params, DimensionWeatherData data) {
+    private static void avoidDeflectors(StormInstance storm, VortexParams params, boolean led,
+                                        FamilyContext context) {
         double margin = (double) VortexField.LIFT_RADIUS_FACTOR * params.coreRadius()
             * VortexField.scale(storm.intensity());
         double deflectorRadius = WeatherManager.deflectorRadius();
-        List<BlockPos> near = data.deflectors().covering(storm.x(), storm.z(),
-            deflectorRadius + margin + DeflectorMath.SLIDE_BAND_BLOCKS);
+        List<BlockPos> near = ProtectedActions.liveDeflectors(context.level(),
+            context.data().deflectors().covering(storm.x(), storm.z(),
+                deflectorRadius + margin + DeflectorMath.SLIDE_BAND_BLOCKS));
         if (near.isEmpty()) {
             return;
         }
@@ -196,9 +210,11 @@ public final class VortexSystem implements FamilySystem {
         if (storm.isSteered()) {
             return;
         }
-        float heading = DeflectorMath.slideHeading(storm.x(), storm.z(), storm.headingDegrees(), margin, near,
-            deflectorRadius);
-        if (heading != storm.headingDegrees()) {
+        float next = led
+            ? storm.headingDegrees()
+            : Headings.wrapDegrees(context.wind().directionDegrees() + storm.headingBiasDegrees());
+        float heading = DeflectorMath.slideHeading(storm.x(), storm.z(), next, margin, near, deflectorRadius);
+        if (heading != next) {
             storm.setMotion(heading, storm.speed());
         }
     }

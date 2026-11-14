@@ -11,9 +11,9 @@ import net.minecraft.nbt.CompoundTag;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the list of temporary fires as far as it can be tested without a level: its capacity, that a position is
- * listed once, the countdown, and what is saved and loaded. Putting the fires out needs a level and is part of the
- * smoke test.
+ * Pins the list of temporary fires as far as it can be tested without a level: its capacity, how a full list makes
+ * room, that a position is listed once, the countdown, and what is saved and loaded. Putting the fires out needs a
+ * level and is part of the smoke test.
  */
 class TemporaryFiresTest {
     private static final BlockPos FIRST = new BlockPos(12, 70, -340);
@@ -52,6 +52,63 @@ class TemporaryFiresTest {
         fires.remove(new BlockPos(3, 64, 0));
         assertEquals(63, fires.size());
         assertTrue(fires.add(new BlockPos(1000, 64, 0)), "a removed fire makes room");
+    }
+
+    @Test
+    void aFullListForgetsItsOldestDueEntryForANewFire() {
+        TemporaryFires fires = new TemporaryFires();
+        for (int i = 0; i < TemporaryFires.MAX_TEMPORARY_FIRES; i++) {
+            fires.add(new BlockPos(i, 64, 0));
+        }
+        advance(fires, TemporaryFires.LIFE_TICKS - 1);
+        assertEquals(64, fires.advance().size(), "every fire is due and none was removed");
+
+        BlockPos fresh = new BlockPos(1000, 64, 0);
+        assertTrue(fires.add(fresh), "a due entry gives up its place");
+        assertEquals(64, fires.size());
+        assertFalse(fires.add(fresh), "a listed position is refused before any entry is forgotten");
+        assertEquals(64, fires.size());
+
+        List<BlockPos> due = fires.advance();
+        assertEquals(63, due.size(), "one due entry is gone and the new fire still burns");
+        assertEquals(new BlockPos(1, 64, 0), due.get(0), "the first one registered was the one forgotten");
+        assertFalse(due.contains(new BlockPos(0, 64, 0)));
+        assertFalse(due.contains(fresh));
+    }
+
+    @Test
+    void onlyDueEntriesMakeRoomInAFullList() {
+        TemporaryFires fires = new TemporaryFires();
+        for (int i = 0; i < 10; i++) {
+            fires.add(new BlockPos(i, 64, 0));
+        }
+        advance(fires, 100);
+        for (int i = 10; i < TemporaryFires.MAX_TEMPORARY_FIRES; i++) {
+            fires.add(new BlockPos(i, 64, 0));
+        }
+        advance(fires, 99);
+        assertEquals(10, fires.advance().size(), "the first ten are due, the others have 100 ticks left");
+
+        for (int i = 0; i < 10; i++) {
+            assertTrue(fires.add(new BlockPos(2000 + i, 64, 0)), "due entry " + i + " makes room");
+            assertEquals(64, fires.size());
+        }
+        assertEquals(List.of(), fires.advance(), "the due entries went in the order they were added, all ten");
+        assertFalse(fires.add(new BlockPos(3000, 64, 0)), "all sixty-four still burn");
+        assertEquals(64, fires.size());
+    }
+
+    @Test
+    void aDueEntryIsKeptWhileThereIsRoom() {
+        TemporaryFires fires = new TemporaryFires();
+        for (int i = 0; i < TemporaryFires.MAX_TEMPORARY_FIRES - 1; i++) {
+            fires.add(new BlockPos(i, 64, 0));
+        }
+        advance(fires, TemporaryFires.LIFE_TICKS);
+
+        assertTrue(fires.add(new BlockPos(1000, 64, 0)), "the sixty-fourth place is free");
+        assertEquals(64, fires.size());
+        assertEquals(63, fires.advance().size(), "no due entry was forgotten for it");
     }
 
     @Test

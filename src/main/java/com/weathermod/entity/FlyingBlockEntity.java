@@ -8,6 +8,7 @@ import com.weathermod.server.WeatherManager;
 import com.weathermod.server.family.ActiveVortex;
 import com.weathermod.server.impact.ProtectedActions;
 import com.weathermod.server.impact.ShieldVolumes;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -23,6 +24,7 @@ import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.level.material.PushReaction;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -57,6 +59,8 @@ public class FlyingBlockEntity extends Entity {
         SynchedEntityData.defineId(FlyingBlockEntity.class, EntityDataSerializers.INT);
     private static final int NO_STORM_ID = -1;
     private static final float FULL_EXPOSURE = 1.0F;
+    private static final double BLOCKS_PER_CHUNK = 16.0;
+    private static final EntityTypeTest<Entity, Entity> ANY_ENTITY = EntityTypeTest.forClass(Entity.class);
 
     private final Vector3d acceleration = new Vector3d();
     private int ageTicks;
@@ -247,9 +251,21 @@ public class FlyingBlockEntity extends Entity {
         if (ProtectedActions.deflected(level, pos.getX() + 0.5, pos.getZ() + 0.5)) {
             return false;
         }
+        return !shielded(level, pos);
+    }
+
+    /**
+     * Whether a contraption or glue entity reaches into the block's box grown by the shield padding. The whole
+     * level is asked, ending at the first hit, and not the entities around the box: a box query only looks at the
+     * entity sections next to the box, and a shield is filed under the section of its position, which for a large
+     * glued region or contraption lies far from most of its own box.
+     */
+    private static boolean shielded(ServerLevel level, BlockPos pos) {
         AABB guarded = new AABB(pos).inflate(ShieldVolumes.PADDING_BLOCKS);
-        return level.getEntities(this, guarded, entity -> entity.getType().is(ModTags.EntityTypes.RIP_SHIELD))
-            .isEmpty();
+        List<Entity> shields = new ArrayList<>(1);
+        level.getEntities(ANY_ENTITY, entity -> entity.getType().is(ModTags.EntityTypes.RIP_SHIELD)
+            && entity.getBoundingBox().intersects(guarded), shields, 1);
+        return !shields.isEmpty();
     }
 
     /** Ends the block without leaving anything but, budget permitting, its break sound and particles. */
@@ -280,6 +296,18 @@ public class FlyingBlockEntity extends Entity {
             countedOut = true;
             DimensionWeatherData.get(serverLevel).runtime().flyingBlockRemoved(countedStormId);
         }
+    }
+
+    /**
+     * Drawn as far as it is tracked: the tracking range of the type, scaled like every entity's draw distance by
+     * the client's render distance and entity distance settings. The inherited rule goes by the size of the box
+     * and would hide a block beyond 63 to 157 blocks, depending on the render distance, while the server goes on
+     * sending its position out to 160.
+     */
+    @Override
+    public boolean shouldRenderAtSqrDistance(double distance) {
+        double range = getType().clientTrackingRange() * BLOCKS_PER_CHUNK * getViewScale();
+        return distance < range * range;
     }
 
     /**

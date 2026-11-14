@@ -16,9 +16,14 @@ import java.lang.ref.WeakReference;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.Registry;
+import net.minecraft.core.SectionPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -35,7 +40,10 @@ import org.joml.Vector3d;
  * player's own move packets, so the player is never snapped back.
  *
  * <p>The lift of a vortex is passed through a {@link LiftPulse}, which pauses it before the server would take
- * the player for floating.
+ * the player for floating. A steered vehicle is carried with short pauses. A player on foot is lifted in hops,
+ * because the server counts every tick such a player spends in the air, except while the player glides on an
+ * elytra or may fly, which the server does not count. The host of an integrated server is never paused: that
+ * server allows flight and kicks nobody for floating.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID, value = Dist.CLIENT)
 public final class ClientEntityForces {
@@ -60,9 +68,9 @@ public final class ClientEntityForces {
      *
      * <p>The push is the sum, at the body's position and velocity, of every funnel whose storm and type are known
      * ({@link VortexField#acceleration}, with the shelter of a roof taken from
-     * {@link ForceRules#underOpenSky}), every downburst in progress ({@link WindForce#addDownburst}) and, under
-     * open sky only, the ambient gust wind plus the outflow of the convective storms. The upward part of the
-     * funnels is dropped on the ticks {@link LiftPulse#allowLift} refuses.
+     * {@link ForceRules#underOpenSky}), every downburst in progress that reaches the body's height
+     * ({@link WindForce#addDownburst}) and, under open sky only, the ambient gust wind plus the outflow of the
+     * convective storms. The upward part of the funnels is dropped on the ticks the {@link LiftPulse} refuses.
      */
     @SubscribeEvent
     public static void onPlayerTick(PlayerTickEvent.Pre event) {
@@ -111,13 +119,15 @@ public final class ClientEntityForces {
                 }
             }
         }
-        if (!liftAllowed(target, inField, lastVerticalMove)) {
+        if (!liftAllowed(target, target == player, inField, lastVerticalMove)) {
             lift = 0.0;
         }
 
         for (ClientDownburst downburst : state.downbursts()) {
-            WindForce.addDownburst(downburst.x(), downburst.z(), downburst.radius(), downburst.speed(),
-                WindForce.downburstEnvelope(downburst.ageTicks(), downburst.durationTicks()), x, z, sum);
+            if (downburstReaches(level, downburst, y)) {
+                WindForce.addDownburst(downburst.x(), downburst.z(), downburst.radius(), downburst.speed(),
+                    WindForce.downburstEnvelope(downburst.ageTicks(), downburst.durationTicks()), x, z, sum);
+            }
         }
 
         if (openSky) {
@@ -200,20 +210,77 @@ public final class ClientEntityForces {
     }
 
     /**
-     * Advances the lift pulse by one tick and says whether the funnels may lift the body in it. A body that
-     * stands on the ground or lies in a fluid counts as resting: the server does not count such a tick as
-     * floating either, and a boat on the water or a swimmer would otherwise use its pulse up before the funnel
-     * arrives. Outside every field nothing lifts, but a streak that began inside one is counted on until the body
-     * lands or descends, as the server counts it on; a body that never began one keeps a fresh pulse.
+     * Advances the lift pulse by one tick and says whether the funnels may lift the body in it. The host of an
+     * integrated server is lifted without a pause: that server allows flight and never kicks for floating. A
+     * client of any other server cannot see whether flight is allowed there and takes it that it is not.
+     *
+     * <p>A body that stands on the ground or lies in a fluid counts as resting: the server does not count such a
+     * tick as floating either, and a boat on the water or a swimmer would otherwise use its pulse up before the
+     * funnel arrives.
+     *
+     * <p>A player on foot is counted from the tick the body leaves the ground, inside a field or not, as the
+     * server counts every tick such a player spends in the air whatever the vertical motion, and is lifted again
+     * only after resting: the ride on foot is a row of hops. A player the server leaves out of that count (see
+     * {@link #neverCountedFloating}) is lifted without a pause, and counted from zero once that ends, as the
+     * server counts. A steered vehicle is counted while a field reaches it. Outside every field nothing lifts,
+     * but a streak that began inside one is counted on until the vehicle lands or descends, as the server counts
+     * it on; a vehicle that never began one keeps a fresh pulse.
+     *
+     * @param onFoot whether the body is the player itself and not a vehicle the player steers
      */
-    private static boolean liftAllowed(Entity target, boolean inField, double lastVerticalMove) {
+    private static boolean liftAllowed(Entity target, boolean onFoot, boolean inField, double lastVerticalMove) {
+        if (Minecraft.getInstance().hasSingleplayerServer()) {
+            LIFT_PULSE.reset();
+            return inField;
+        }
+        boolean resting = target.onGround() || target.isInFluidType();
+        if (onFoot) {
+            boolean allowed = LIFT_PULSE.allowLiftOnFoot(resting || neverCountedFloating(target),
+                target.getGravity());
+            return inField && allowed;
+        }
         if (!inField && LIFT_PULSE.streak() == 0) {
             LIFT_PULSE.reset();
             return false;
         }
-        boolean resting = target.onGround() || target.isInFluidType();
         boolean allowed = LIFT_PULSE.allowLift(resting, lastVerticalMove, target.getGravity());
         return inField && allowed;
+    }
+
+    /**
+     * Whether the server takes a player on foot for floating in no tick at all, however long the player stays in
+     * the air: while gliding on an elytra, while allowed to fly (creative mode, or flight another mod grants),
+     * under Levitation and during a riptide spin. The server syncs all four to the player's own client.
+     */
+    private static boolean neverCountedFloating(Entity target) {
+        return target instanceof Player player && (player.isFallFlying() || player.mayFly()
+            || player.hasEffect(MobEffects.LEVITATION) || player.isAutoSpinAttack());
+    }
+
+    /**
+     * Whether a downburst reaches the body's height, by the rule the server pushes the other entities with: no
+     * further than {@link WindForce#DOWNBURST_VERTICAL_REACH_BLOCKS} above or below the surface under the
+     * downburst's centre. The surface is read from this client's own chunk, one above the top block that stops
+     * motion or holds a fluid. The server does not count leaves, with a heightmap that clients are not sent, so
+     * under a canopy the two differ by the height of the crown.
+     *
+     * <p>Where the surface cannot be had the downburst counts as in reach: under a ceiling, where the heightmap
+     * reports the roof and the server looks for the floor around a player instead, and while the chunk of the
+     * centre is not loaded on this client. Never loads a chunk.
+     */
+    private static boolean downburstReaches(Level level, ClientDownburst downburst, double y) {
+        if (level.dimensionType().hasCeiling()) {
+            return true;
+        }
+        int centreX = Mth.floor(downburst.x());
+        int centreZ = Mth.floor(downburst.z());
+        LevelChunk chunk = level.getChunkSource().getChunkNow(SectionPos.blockToSectionCoord(centreX),
+            SectionPos.blockToSectionCoord(centreZ));
+        if (chunk == null) {
+            return true;
+        }
+        int surfaceY = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, centreX, centreZ) + 1;
+        return WindForce.downburstReachesHeight(y, surfaceY);
     }
 
     /** Adds the outflow of every convective storm of a known type at a point to a wind vector. */

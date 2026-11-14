@@ -29,8 +29,9 @@ import net.minecraft.world.phys.AABB;
 
 /**
  * What falling hail does to the world under a storm's hail core (see {@link HailCore}): it hurts players and mobs
- * that stand under the open sky, and it breaks crops, small plants and, when the server allows it, glass that lies
- * open to the sky. Called by the convective family every tick; it does nothing while the storm does not hail.
+ * that stand under the open sky, where a roof of glass is a roof like any other, and it breaks crops, small plants
+ * and, when the server allows it, glass that lies open to the sky. Called by the convective family every tick; it
+ * does nothing while the storm does not hail.
  */
 public final class HailSystem {
     /** Entities are checked every this many ticks. */
@@ -133,13 +134,29 @@ public final class HailSystem {
             if (random.nextFloat() >= HIT_CHANCE * strength) {
                 continue;
             }
-            if (!level.canSeeSky(BlockPos.containing(victim.getEyePosition()))) {
+            if (!reaches(level, BlockPos.containing(victim.getEyePosition()))) {
                 continue;
             }
             if (mayHit(victim instanceof Player, victim.getHealth(), damage, hailKillsMobs)) {
                 victim.hurt(source, damage);
             }
         }
+    }
+
+    /**
+     * Whether hail reaches the block a victim's eyes are in: the level can see the sky there, which it never can
+     * in a dimension without sky light, and no block that stops motion lies above that block in its column. The
+     * second test is for glass and its like, which let the sky light through while hail stops on them; a block
+     * that shares the eyes' own cell, such as the slab a small animal stands on, is no roof. A column that is not
+     * loaded counts as covered. Never loads a chunk.
+     */
+    private static boolean reaches(ServerLevel level, BlockPos eye) {
+        if (!level.canSeeSky(eye)) {
+            return false;
+        }
+        LevelChunk column = level.getChunkSource().getChunkNow(eye.getX() >> 4, eye.getZ() >> 4);
+        return column != null
+            && column.getHeight(Heightmap.Types.MOTION_BLOCKING, eye.getX() & 15, eye.getZ() & 15) <= eye.getY();
     }
 
     /**

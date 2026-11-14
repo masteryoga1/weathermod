@@ -23,11 +23,14 @@ import java.util.OptionalInt;
 import java.util.function.Function;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.vehicle.Boat;
 import net.minecraft.world.level.entity.EntityTypeTest;
@@ -36,6 +39,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.living.LivingFallEvent;
+import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import org.joml.Vector3d;
 
 /**
@@ -50,11 +54,13 @@ import org.joml.Vector3d;
  * no player is ever snapped back. All passes together push at most
  * {@link StormRuntime#MAX_FORCED_ENTITIES_PER_LEVEL_TICK} entities per level tick, and the budget is paid only
  * for entities that were really pushed.
+ *
+ * <p>An entity that stands where entities do not tick (the outer rings of the loaded area and everything beyond
+ * the simulation distance) is left alone. It would neither move nor slow down, so it would store every push and
+ * be thrown by all of them at once in the tick it starts to move.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID)
 public final class EntityForces {
-    /** A downburst pushes entities this far above and below the surface under its centre. */
-    private static final double DOWNBURST_VERTICAL_REACH_BLOCKS = 32.0;
     private static final EntityTypeTest<Entity, Entity> ANY_ENTITY = EntityTypeTest.forClass(Entity.class);
 
     private EntityForces() {
@@ -67,7 +73,9 @@ public final class EntityForces {
      * <li>every published vortex that acts on the world burns what stands inside a fire whirl, throws the crew out
      * of a boat inside a waterspout, and pushes the entities in its field with {@link VortexField#acceleration},
      * scaled by their mass; an entity the field reaches is stamped for the fall damage policy and, while it is
-     * lifted, has its fall distance cleared;</li>
+     * lifted, has its fall distance cleared. Players and what they steer are handled first and outside the
+     * budget, then the mobs and vehicles, and dropped items and experience orbs with what the budget has
+     * left;</li>
      * <li>every downburst in progress pushes the entities within its reach with
      * {@link WindForce#addDownburst};</li>
      * <li>every {@link ForceRules#WIND_FORCE_INTERVAL_TICKS} ticks the ambient wind plus the outflow of the
@@ -132,67 +140,132 @@ public final class EntityForces {
         }
     }
 
+    /**
+     * Tells the operator of a dedicated server how its players ride a tornado. A server that does not allow
+     * flight disconnects a player on foot who stays in the air for too long, whatever the reason. A client cannot
+     * see whether its server allows flight, so on every dedicated server the clients lift such a player in hops
+     * that end on the ground in time. The line is information and no warning: allowing flight on the server does
+     * not end the hops.
+     */
+    @SubscribeEvent
+    public static void onServerStarted(ServerStartedEvent event) {
+        MinecraftServer server = event.getServer();
+        if (server.isDedicatedServer() && WeatherManager.pushPlayers()
+            && WeatherManager.destructionMode().affectsEntities()) {
+            WeatherMod.LOGGER.info("On a dedicated server a tornado lifts players on foot in short hops instead of"
+                + " carrying them. The allow-flight setting does not change that: clients cannot see it");
+        }
+    }
+
     private static void pushWithVortex(ServerLevel level, StormRuntime runtime, ActiveVortex vortex, int tick,
                                        List<Entity> found, Vector3d acceleration) {
-        int budget = Math.min(ForceRules.MAX_FORCED_ENTITIES_PER_STORM_TICK, runtime.forcedLeft());
-        if (budget <= 0) {
-            return;
-        }
         VortexParams params = vortex.params();
         FunnelSpine spine = vortex.spine();
         boolean burns = params.kind().setsFire();
         boolean throwsCrews = params.kind() == VortexKind.WATERSPOUT;
-        double centreX = vortex.x();
-        double centreZ = vortex.z();
         double baseX = vortex.baseX();
         double baseZ = vortex.baseZ();
         double reach = VortexField.influenceRadius(params, spine.strength());
         AABB box = new AABB(baseX - reach, spine.groundY() - VortexField.REACH_BELOW_BLOCKS, baseZ - reach,
             baseX + reach, spine.topY() + VortexField.REACH_ABOVE_BLOCKS, baseZ + reach);
-        found.clear();
-        level.getEntities(ANY_ENTITY, box, entity -> inBox(box, entity) && concerns(entity, burns, throwsCrews),
-            found, budget);
 
+        // Players and what they steer come first, outside the cap and the budget. Their own client pushes them,
+        // so they cost nothing here, and no crowd of other entities can keep them from being burned or stamped.
         boolean playersPushed = WeatherManager.pushPlayers();
-        long gameTime = level.getGameTime();
+        for (ServerPlayer player : level.players()) {
+            if (player.isAlive() && !player.isSpectator() && inBox(box, player)
+                && touch(level, vortex, player, burns, false, playersPushed, acceleration)) {
+                // The horizontal velocity of the server's copy is kept at what the client last reported, so that
+                // the motion packet vanilla sends when the player is hurt carries the orbit. The server moves
+                // that copy by its velocity every tick and takes the player for standing only when the move is
+                // stopped from below, so on the ground the copy keeps its own downward velocity.
+                Vec3 known = player.getKnownMovement();
+                double vy = player.onGround() ? player.getDeltaMovement().y : known.y;
+                player.setDeltaMovement(known.x, vy, known.z);
+            }
+            Entity vehicle = player.getVehicle();
+            if (vehicle != null && vehicle.getControllingPassenger() == player && vehicle.isAlive()
+                && inBox(box, vehicle)) {
+                touch(level, vortex, vehicle, burns, throwsCrews, playersPushed, acceleration);
+            }
+        }
+
+        int budget = Math.min(ForceRules.MAX_FORCED_ENTITIES_PER_STORM_TICK, runtime.forcedLeft());
+        if (budget <= 0) {
+            return;
+        }
+        // A query stops at its cap in the order of the entity sections, west to east, whatever it has found by
+        // then. A tornado sheds dropped items by the hundred, so mobs and vehicles are asked for first and the
+        // loose things only fill what is left.
+        found.clear();
+        level.getEntities(ANY_ENTITY, box,
+            entity -> inBox(box, entity) && !loose(entity) && concerns(level, entity, burns, throwsCrews),
+            found, budget);
+        // The query tests its cap after it has added a match, so a full list must not be offered again.
+        if (found.size() < budget) {
+            level.getEntities(ANY_ENTITY, box,
+                entity -> inBox(box, entity) && loose(entity) && concerns(level, entity, burns, throwsCrews),
+                found, budget);
+        }
+
         int pushed = 0;
         for (Entity entity : found) {
-            double x = entity.getX();
-            double y = entity.getY();
-            double z = entity.getZ();
-            if (burns && !entity.fireImmune() && ForceRules.insideFunnel(spine, centreX, centreZ, x, y, z)) {
-                entity.setRemainingFireTicks(
-                    Math.max(entity.getRemainingFireTicks(), ForceRules.FIRE_WHIRL_BURN_TICKS));
-            }
-            if (throwsCrews && entity instanceof Boat && entity.isVehicle()
-                && ForceRules.insideFunnel(spine, centreX, centreZ, x, y, z)) {
-                entity.ejectPassengers();
-            }
-            ServerPlayer player = entity instanceof ServerPlayer serverPlayer ? serverPlayer : null;
-            if ((player != null || steeredByPlayer(entity)) && !playersPushed) {
-                continue;
-            }
-            Vec3 velocity = entity.getKnownMovement();
-            float exposure = VortexField.exposure(params.tier(), ForceRules.underOpenSky(level, entity));
-            if (!VortexField.acceleration(params, spine, centreX, centreZ, x, y, z, velocity.x, velocity.y,
-                velocity.z, exposure, acceleration)) {
-                continue;
-            }
-            entity.getPersistentData().putLong(ForceRules.VORTEX_STAMP_KEY, gameTime);
-            if (acceleration.y > 0.0) {
-                entity.resetFallDistance();
-            }
-            if (player != null) {
-                // The server does not simulate a player. Its copy of the velocity is kept at what the client last
-                // reported, so that the motion packet vanilla sends when the player is hurt carries the orbit.
-                player.setDeltaMovement(player.getKnownMovement());
-            } else if (pushable(entity)) {
+            if (touch(level, vortex, entity, burns, throwsCrews, true, acceleration) && pushedByServer(entity)) {
                 float mass = ForceRules.mass(entity);
                 ForceRules.apply(entity, acceleration.x * mass, acceleration.y * mass, acceleration.z * mass, tick);
                 pushed++;
             }
         }
         runtime.spendForced(pushed);
+    }
+
+    /**
+     * What a vortex does to an entity short of pushing it. A fire whirl sets the entity on fire and a waterspout
+     * throws the crew out of a boat when the entity is inside the funnel, which is a test of place alone. Then,
+     * when the field acts on the entity and reaches it, the entity is stamped for the fall damage policy and,
+     * while the field lifts it, has its fall distance cleared.
+     *
+     * <p>The funnel is entered with the body, not with the feet: its foot is the top of a whole block, and a
+     * floating boat or a mob on soul sand has its feet a little below that. An entity whose box reaches up to
+     * the foot counts at the height of the foot; one that lies wholly below it stays outside.
+     *
+     * @param fieldActs    whether the field concerns the entity at all: false for a player, and for what a
+     *                     player steers, while players are not pushed
+     * @param acceleration receives the push of the field when this returns true
+     * @return whether the field acts on the entity and reaches it
+     */
+    private static boolean touch(ServerLevel level, ActiveVortex vortex, Entity entity, boolean burns,
+                                 boolean throwsCrews, boolean fieldActs, Vector3d acceleration) {
+        VortexParams params = vortex.params();
+        FunnelSpine spine = vortex.spine();
+        double centreX = vortex.x();
+        double centreZ = vortex.z();
+        double x = entity.getX();
+        double y = entity.getY();
+        double z = entity.getZ();
+        double funnelY = Math.max(y, Math.min(entity.getBoundingBox().maxY, spine.groundY()));
+        if (burns && !entity.fireImmune() && ForceRules.insideFunnel(spine, centreX, centreZ, x, funnelY, z)) {
+            entity.setRemainingFireTicks(
+                Math.max(entity.getRemainingFireTicks(), ForceRules.FIRE_WHIRL_BURN_TICKS));
+        }
+        if (throwsCrews && entity instanceof Boat && entity.isVehicle()
+            && ForceRules.insideFunnel(spine, centreX, centreZ, x, funnelY, z)) {
+            entity.ejectPassengers();
+        }
+        if (!fieldActs) {
+            return false;
+        }
+        Vec3 velocity = entity.getKnownMovement();
+        float exposure = VortexField.exposure(params.tier(), ForceRules.underOpenSky(level, entity));
+        if (!VortexField.acceleration(params, spine, centreX, centreZ, x, y, z, velocity.x, velocity.y,
+            velocity.z, exposure, acceleration)) {
+            return false;
+        }
+        entity.getPersistentData().putLong(ForceRules.VORTEX_STAMP_KEY, level.getGameTime());
+        if (acceleration.y > 0.0) {
+            entity.resetFallDistance();
+        }
+        return true;
     }
 
     private static void pushWithDownburst(ServerLevel level, StormRuntime runtime, ActiveDownburst downburst,
@@ -212,11 +285,11 @@ public final class EntityForces {
         double surfaceY = surface.getAsInt();
         double reach = (double) downburst.radius() * WindForce.DOWNBURST_REACH_FACTOR;
         double reachSqr = reach * reach;
-        AABB box = new AABB(centreX - reach, surfaceY - DOWNBURST_VERTICAL_REACH_BLOCKS, centreZ - reach,
-            centreX + reach, surfaceY + DOWNBURST_VERTICAL_REACH_BLOCKS, centreZ + reach);
+        AABB box = new AABB(centreX - reach, surfaceY - WindForce.DOWNBURST_VERTICAL_REACH_BLOCKS, centreZ - reach,
+            centreX + reach, surfaceY + WindForce.DOWNBURST_VERTICAL_REACH_BLOCKS, centreZ + reach);
         found.clear();
         level.getEntities(ANY_ENTITY, box, entity -> inBox(box, entity)
-            && horizontalDistanceSqr(entity, centreX, centreZ) <= reachSqr && pushable(entity), found, budget);
+            && horizontalDistanceSqr(entity, centreX, centreZ) <= reachSqr && pushable(level, entity), found, budget);
 
         int pushed = 0;
         for (Entity entity : found) {
@@ -276,7 +349,7 @@ public final class EntityForces {
             found.clear();
             level.getEntities(ANY_ENTITY, player.getBoundingBox().inflate(ForceRules.WIND_FORCE_PLAYER_RANGE_BLOCKS),
                 entity -> entity.distanceToSqr(player) <= rangeSqr && !seen.contains(entity.getId())
-                    && pushable(entity) && ForceRules.underOpenSky(level, entity), found, left);
+                    && pushable(level, entity) && ForceRules.underOpenSky(level, entity), found, left);
             for (Entity entity : found) {
                 seen.add(entity.getId());
                 float mass = ForceRules.mass(entity);
@@ -327,17 +400,23 @@ public final class EntityForces {
     }
 
     /**
-     * Whether a vortex has anything to do with an entity in its box: players and what they steer (their own
-     * client pushes them, the server burns them, stamps them for the fall damage policy and keeps a player's
-     * velocity current), everything the server may push, whatever can burn in a fire whirl and every boat in a
-     * waterspout. Spectators and dead entities never.
+     * Whether the capped queries of a vortex take an entity in its box: everything the server may push, whatever
+     * can burn in a fire whirl and every boat in a waterspout, as long as it ticks where it stands. Never a
+     * spectator or a dead entity, and never a player or what a player steers: those are handled on their own,
+     * outside the cap.
      */
-    private static boolean concerns(Entity entity, boolean burns, boolean throwsCrews) {
-        if (!entity.isAlive() || entity.isSpectator()) {
+    private static boolean concerns(ServerLevel level, Entity entity, boolean burns, boolean throwsCrews) {
+        if (!entity.isAlive() || entity.isSpectator() || entity instanceof Player || steeredByPlayer(entity)) {
             return false;
         }
-        return entity instanceof ServerPlayer || steeredByPlayer(entity) || pushable(entity)
-            || (burns && !entity.fireImmune()) || (throwsCrews && entity instanceof Boat);
+        boolean wanted = pushedByServer(entity) || (burns && !entity.fireImmune())
+            || (throwsCrews && entity instanceof Boat);
+        return wanted && ticks(level, entity);
+    }
+
+    /** Dropped items and experience orbs, which a vortex only looks for once the mobs and vehicles are found. */
+    private static boolean loose(Entity entity) {
+        return entity instanceof ItemEntity || entity instanceof ExperienceOrb;
     }
 
     /**
@@ -349,8 +428,22 @@ public final class EntityForces {
         return entity.getControllingPassenger() instanceof Player;
     }
 
-    private static boolean pushable(Entity entity) {
+    /** Whether the server pushes an entity of this kind at all; whether it ticks is asked separately. */
+    private static boolean pushedByServer(Entity entity) {
         return ForceRules.mayBePushed(entity) && ForceRules.categoryEnabled(entity);
+    }
+
+    /** Whether the server may push the entity now: it is of a kind the server pushes and it ticks. */
+    private static boolean pushable(ServerLevel level, Entity entity) {
+        return pushedByServer(entity) && ticks(level, entity);
+    }
+
+    /**
+     * Whether the entity stands where entities tick. Entity queries also return what lies in chunks that are
+     * loaded without ticking their entities; a push given there is never spent and never slowed.
+     */
+    private static boolean ticks(ServerLevel level, Entity entity) {
+        return level.isPositionEntityTicking(entity.blockPosition());
     }
 
     /** Entity queries reach a little beyond their box, so every predicate tests the box again. */

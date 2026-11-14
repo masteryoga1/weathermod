@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Pins the shield volumes as far as they can be tested without a level: the padding of the boxes, the overflow
- * that shields everything, the empty set, the box count and the keep range around the bases of vortices. The scan
- * itself needs a level with entities and is part of the smoke test.
+ * that shields everything, the empty set, the box count, the keep range around the bases of vortices and which
+ * storms a scan was made for. The scan itself needs a level with entities and is part of the smoke test.
  */
 class ShieldVolumesTest {
     private static final AABB UNIT_BOX = new AABB(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
@@ -155,5 +155,29 @@ class ShieldVolumesTest {
     void withoutBasesNothingIsInRange() {
         assertFalse(ShieldVolumes.inKeepRange(0.0, 0.0, new double[0]));
         assertFalse(ShieldVolumes.inKeepRange(0.0, 0.0, null));
+    }
+
+    @Test
+    void aScanWasMadeForTheStormsWhoseVorticesActedThen() {
+        int[] scanned = {7, -3, 12};
+        assertTrue(ShieldVolumes.scannedFor(7, scanned), "the first id");
+        assertTrue(ShieldVolumes.scannedFor(-3, scanned), "an id in the middle");
+        assertTrue(ShieldVolumes.scannedFor(12, scanned), "the last id");
+        assertFalse(ShieldVolumes.scannedFor(8, scanned), "a storm whose vortex did not act at the scan");
+        assertFalse(ShieldVolumes.scannedFor(0, scanned), "zero is an id like any other");
+    }
+
+    @Test
+    void asManyVorticesAsBeforeAreNotTheSameVortices() {
+        int[] scanned = {1};
+        assertTrue(ShieldVolumes.scannedFor(1, scanned));
+        assertFalse(ShieldVolumes.scannedFor(2, scanned), "one vortex ended and another began: still one, but new");
+    }
+
+    @Test
+    void withoutScannedStormsNoScanWasMadeForAnyStorm() {
+        assertFalse(ShieldVolumes.scannedFor(0, new int[0]));
+        assertFalse(ShieldVolumes.scannedFor(5, new int[0]));
+        assertFalse(ShieldVolumes.scannedFor(5, null));
     }
 }

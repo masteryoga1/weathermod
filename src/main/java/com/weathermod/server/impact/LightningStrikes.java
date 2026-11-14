@@ -28,6 +28,7 @@ import net.minecraft.world.entity.ai.village.poi.PoiTypes;
 import net.minecraft.world.entity.animal.horse.SkeletonHorse;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.NaturalSpawner;
 import net.minecraft.world.level.block.BaseFireBlock;
 import net.minecraft.world.level.block.LightningRodBlock;
 import net.minecraft.world.level.block.WeatheringCopper;
@@ -57,8 +58,9 @@ import org.jetbrains.annotations.Nullable;
  * storms may change blocks and nowhere else. The mod never powers a rod itself.
  *
  * <p>The filter goes by the moment a bolt joins the level, because a vanilla storm bolt cannot be told from a
- * summoned one by its fields: vanilla's own lightning is added while chunks tick, between the start of a level's
- * tick and its first entity tick, whereas thrown tridents, commands and command blocks act at other times.
+ * summoned one by its fields: vanilla's own lightning is added while chunks tick, between the moment a level begins
+ * to tick its chunks and its first entity tick. Scheduled functions and command blocks act earlier in the level's
+ * tick, thrown tridents while the entities tick and typed commands outside every level tick.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID)
 public final class LightningStrikes {
@@ -84,14 +86,21 @@ public final class LightningStrikes {
     /** The server level whose tick has begun and whose entities have not ticked yet. Written by the server thread. */
     @Nullable
     private static ServerLevel chunkPhaseLevel;
+    /**
+     * The spawn state that level's chunk source held when the tick began. The chunk source makes a new one
+     * immediately before it ticks its chunks, so another one in its place means that chunk ticking has begun.
+     */
+    @Nullable
+    private static NaturalSpawner.SpawnState spawnStateAtTickStart;
 
     private LightningStrikes() {
     }
 
     /**
      * One natural strike of a storm: at a point picked by {@link StrikeTargeting}, within the level's bolt budget
-     * and strike spacing, in a loaded chunk only. With vanilla's chance the strike springs a skeleton trap instead
-     * of doing damage. Returns whether a bolt was spawned.
+     * and strike spacing, only in a chunk that ticks its entities (a bolt elsewhere would never tick and so never
+     * end). With vanilla's chance the strike springs a skeleton trap instead of doing damage, but never inside a
+     * weather deflector's circle. Returns whether a bolt was spawned.
      */
     public static boolean strikeFromStorm(StormInstance storm, ConvectiveParams params, FamilyContext context) {
         ServerLevel level = context.level();
@@ -105,7 +114,7 @@ public final class LightningStrikes {
     /**
      * Strikes the surface at (x, z) now, ignoring the budgets and without a skeleton trap: commands and tests. A
      * lightning rod nearby draws the strike as it draws any other. Returns whether a bolt was spawned, which it is
-     * not in a chunk that is not loaded.
+     * not in a chunk that is not loaded or does not tick its entities.
      *
      * @param fireChance chance that the strike lights a fire where the config asks the storm type for one, 0..1
      */
@@ -120,18 +129,25 @@ public final class LightningStrikes {
     }
 
     /**
-     * True from the start of a server level's tick until its first entity ticks (or the tick ends): the window in
-     * which vanilla ticks chunks and strikes its own random lightning.
+     * True from the moment a server level begins to tick its chunks until its first entity ticks (or the tick
+     * ends): the window in which vanilla strikes its own random lightning. What the level's tick does before its
+     * chunks tick lies outside it: the scheduled functions and the scheduled block ticks, which run every command
+     * block. The beginning is read off the chunk source's spawn state, which is replaced just before the chunks
+     * tick; while the game is frozen it is not replaced, no chunk ticks and the window stays shut.
      */
     public static boolean inChunkPhase(ServerLevel level) {
-        return chunkPhaseLevel == level;
+        return chunkPhaseLevel == level && level.getChunkSource().getLastSpawnState() != spawnStateAtTickStart;
     }
 
-    /** Remembers a server level as the one in its chunk phase; levels tick one after another. */
+    /**
+     * Remembers a server level as the one whose tick has begun, with the spawn state its chunk source holds at
+     * that moment; levels tick one after another.
+     */
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onLevelTickPre(LevelTickEvent.Pre event) {
         if (event.getLevel() instanceof ServerLevel level) {
             chunkPhaseLevel = level;
+            spawnStateAtTickStart = level.getChunkSource().getLastSpawnState();
         }
     }
 
@@ -140,6 +156,7 @@ public final class LightningStrikes {
     public static void onLevelTickPost(LevelTickEvent.Post event) {
         if (event.getLevel() instanceof ServerLevel) {
             chunkPhaseLevel = null;
+            spawnStateAtTickStart = null;
         }
     }
 
@@ -149,14 +166,16 @@ public final class LightningStrikes {
         ServerLevel remembered = chunkPhaseLevel;
         if (remembered != null && event.getEntity().level() == remembered) {
             chunkPhaseLevel = null;
+            spawnStateAtTickStart = null;
         }
     }
 
     /**
      * Drops vanilla's own storm lightning and the skeleton trap horse it adds just before a bolt, while the mod
      * drives the thunder flag of the level and the filter is switched on. Only entities that join during the
-     * chunk phase are dropped, so Channeling tridents and summoned lightning keep working; the mod's own bolts and
-     * trap horses pass because they are added under {@link #isSpawning()}.
+     * chunk phase are dropped, so Channeling tridents and lightning summoned by a typed command, a command block
+     * or a scheduled function keep working; the mod's own bolts and trap horses pass because they are added under
+     * {@link #isSpawning()}.
      */
     @SubscribeEvent
     public static void onEntityJoinLevel(EntityJoinLevelEvent event) {
@@ -190,7 +209,7 @@ public final class LightningStrikes {
         int blockX = Mth.floor(targetX);
         int blockZ = Mth.floor(targetZ);
         LevelChunk chunk = level.getChunkSource().getChunkNow(blockX >> 4, blockZ >> 4);
-        if (chunk == null) {
+        if (chunk == null || !level.isPositionEntityTicking(new BlockPos(blockX, 0, blockZ))) {
             return false;
         }
         if (natural && (!runtime.strikeAllowed(targetX, targetZ) || !runtime.tryBolt())) {
@@ -198,15 +217,20 @@ public final class LightningStrikes {
         }
         BlockPos pos = new BlockPos(blockX,
             chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, blockX & 15, blockZ & 15) + 1, blockZ);
+        boolean drawnAway = false;
         Optional<BlockPos> rod = findRod(level, pos);
         if (rod.isPresent()) {
-            pos = rod.get().above();
-            chunk = level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
-            if (chunk == null) {
+            BlockPos aboveRod = rod.get().above();
+            LevelChunk rodChunk = level.getChunkSource().getChunkNow(aboveRod.getX() >> 4, aboveRod.getZ() >> 4);
+            if (rodChunk == null || !level.isPositionEntityTicking(aboveRod)) {
+                // No bolt can be shown on this rod, yet it draws the strike: the bolt stays where it was aimed
+                // and does nothing there.
+                drawnAway = true;
+            } else if (natural && !runtime.strikeAllowed(aboveRod.getX() + 0.5, aboveRod.getZ() + 0.5)) {
                 return false;
-            }
-            if (natural && !runtime.strikeAllowed(pos.getX() + 0.5, pos.getZ() + 0.5)) {
-                return false;
+            } else {
+                pos = aboveRod;
+                chunk = rodChunk;
             }
         }
         double x = pos.getX() + 0.5;
@@ -216,8 +240,9 @@ public final class LightningStrikes {
         BlockState surfaceState = chunk.getBlockState(surface);
 
         DestructionMode mode = WeatherManager.destructionMode();
-        boolean deflected = ProtectedActions.deflected(level, x, z);
-        boolean trap = natural && mode.affectsEntities() && springsTrap(level, pos, surfaceState, random);
+        boolean deflected = drawnAway || ProtectedActions.deflected(level, x, z);
+        boolean trap = natural && !deflected && mode.affectsEntities()
+            && springsTrap(level, pos, surfaceState, random);
         boolean blockEffects = !trap && mode.ripsBlocks() && !deflected
             && copperAllows(level, chunk, surface, surfaceState);
         if (!blockEffects && reactsToLightning(chunk.getBlockState(pos))) {
@@ -258,7 +283,10 @@ public final class LightningStrikes {
 
     /**
      * The lightning rod that draws a strike at {@code pos}: the nearest one within {@link #ROD_SEARCH_BLOCKS} that
-     * is the top block of its column, as vanilla picks it. Rods in chunks that are not loaded are passed over.
+     * is the top block of its column, as vanilla picks it. Rods in chunks that are not loaded are passed over. A
+     * rod in a loaded chunk that does not tick its entities still draws the strike. No bolt can be shown there, so
+     * the bolt falls where it was aimed and is as free of effects as one inside a weather deflector's circle: the
+     * rod protects its surroundings and the storm keeps its lightning.
      */
     private static Optional<BlockPos> findRod(ServerLevel level, BlockPos pos) {
         return level.getPoiManager().findClosest(

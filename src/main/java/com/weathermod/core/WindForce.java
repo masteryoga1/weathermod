@@ -26,6 +26,8 @@ public final class WindForce {
     public static final int DOWNBURST_RAMP_TICKS = 20;
     /** A downburst fades over its last ticks, this many. */
     public static final int DOWNBURST_DECAY_TICKS = 40;
+    /** A downburst pushes bodies no further than this above or below the surface under its centre. */
+    public static final double DOWNBURST_VERTICAL_REACH_BLOCKS = 32.0;
 
     /** The outflow of a downburst reaches its full speed at this fraction of the radius. */
     private static final float DOWNBURST_FULL_FRACTION = 0.5F;
@@ -85,6 +87,18 @@ public final class WindForce {
             return 0.0F;
         }
         return (float) (speed * envelope * profile);
+    }
+
+    /**
+     * Whether a downburst reaches a body at the height {@code y}: the body is no further than
+     * {@link #DOWNBURST_VERTICAL_REACH_BLOCKS} above or below the surface under the downburst's centre, so the
+     * burst is felt on the ground and in the air above it and not in a mine far below. A height that is not a
+     * number is out of reach.
+     *
+     * @param surfaceY the y of the first free block above the ground under the downburst's centre
+     */
+    public static boolean downburstReachesHeight(double y, double surfaceY) {
+        return Math.abs(y - surfaceY) <= DOWNBURST_VERTICAL_REACH_BLOCKS;
     }
 
     /**

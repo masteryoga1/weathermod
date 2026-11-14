@@ -24,7 +24,7 @@ import net.minecraft.world.phys.AABB;
 public final class ShieldVolumes {
     /** Boxes are grown by this much: anchors, tracks and supports touching the structure. */
     public static final double PADDING_BLOCKS = 1.0;
-    /** Ticks between two scans of the level. */
+    /** Ticks between two scans of the level while the same vortices act on the world. */
     public static final int REFRESH_INTERVAL_TICKS = 20;
     /** Only shield entities this near the base of a vortex that acts on the world are kept. */
     public static final double KEEP_RANGE_BLOCKS = 160.0;
@@ -33,6 +33,7 @@ public final class ShieldVolumes {
 
     private static final int BOX_STRIDE = 6;
     private static final double[] NO_BOUNDS = new double[0];
+    private static final int[] NO_STORM_IDS = new int[0];
 
     /** The padded boxes, six numbers each: min x, y, z, then max x, y, z. */
     private double[] bounds = NO_BOUNDS;
@@ -47,6 +48,8 @@ public final class ShieldVolumes {
     private double allMaxZ;
     private boolean scanned;
     private int lastScanTick;
+    /** The storms whose vortices acted on the world at the last scan: the boxes cover the reach of these only. */
+    private int[] scannedStormIds = NO_STORM_IDS;
 
     /** Creates an empty set that shields nothing and scans at the first {@link #refreshIfDue}. */
     public ShieldVolumes() {
@@ -158,22 +161,42 @@ public final class ShieldVolumes {
     }
 
     /**
-     * Rescans when {@link #REFRESH_INTERVAL_TICKS} have passed since the last scan, and at the first call. One
-     * whole-level scan, no per-block queries: every entity whose type is in {@code #weathermod:rip_shield} and
-     * that is in keep range of the base of a vortex that acts on the world gives a box. With no such vortex the
-     * boxes are cleared without a scan. When the scan finds more than {@link #MAX_SHIELDS_PER_LEVEL} entities the
-     * set overflows; one warning is logged when that begins.
+     * Whether a storm's vortex was one of those a scan was made for; {@code scannedStormIds} are the ids of the
+     * storms whose vortices acted on the world at that scan. No ids, no scan.
+     */
+    public static boolean scannedFor(int stormId, int[] scannedStormIds) {
+        if (scannedStormIds == null) {
+            return false;
+        }
+        for (int scannedStormId : scannedStormIds) {
+            if (scannedStormId == stormId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Rescans when {@link #REFRESH_INTERVAL_TICKS} have passed since the last scan, at the first call, and at
+     * once when a vortex acts on the world that did not at the last scan: the boxes of that scan hold nothing
+     * around it. A vortex that stopped acting forces no scan. One whole-level scan, no per-block queries: every
+     * entity whose type is in {@code #weathermod:rip_shield} and that is in keep range of the base of a vortex
+     * that acts on the world gives a box. With no such vortex the boxes are cleared without a scan. When the scan
+     * finds more than {@link #MAX_SHIELDS_PER_LEVEL} entities the set overflows; one warning is logged when that
+     * begins.
      *
      * @param level    the level to scan
      * @param tick     the level's weather tick
      * @param vortices the vortices published for the level
      */
     public void refreshIfDue(ServerLevel level, int tick, Collection<ActiveVortex> vortices) {
-        if (scanned && tick >= lastScanTick && (long) tick - lastScanTick < REFRESH_INTERVAL_TICKS) {
+        if (scanned && tick >= lastScanTick && (long) tick - lastScanTick < REFRESH_INTERVAL_TICKS
+            && coversActing(vortices)) {
             return;
         }
         scanned = true;
         lastScanTick = tick;
+        scannedStormIds = actingStormIds(vortices);
 
         double[] bases = actingBases(vortices);
         if (bases.length == 0) {
@@ -197,6 +220,37 @@ public final class ShieldVolumes {
                     + " no block is ripped in this dimension until there are fewer",
                 MAX_SHIELDS_PER_LEVEL, (int) KEEP_RANGE_BLOCKS, level.dimension().location());
         }
+    }
+
+    /** Whether the last scan was made for every vortex that acts on the world now. */
+    private boolean coversActing(Collection<ActiveVortex> vortices) {
+        for (ActiveVortex vortex : vortices) {
+            if (vortex.actsOnWorld() && !scannedFor(vortex.stormId(), scannedStormIds)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int[] actingStormIds(Collection<ActiveVortex> vortices) {
+        int acting = 0;
+        for (ActiveVortex vortex : vortices) {
+            if (vortex.actsOnWorld()) {
+                acting++;
+            }
+        }
+        if (acting == 0) {
+            return NO_STORM_IDS;
+        }
+        int[] ids = new int[acting];
+        int at = 0;
+        for (ActiveVortex vortex : vortices) {
+            if (vortex.actsOnWorld()) {
+                ids[at] = vortex.stormId();
+                at++;
+            }
+        }
+        return ids;
     }
 
     private static double[] actingBases(Collection<ActiveVortex> vortices) {

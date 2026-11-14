@@ -201,7 +201,7 @@ public final class ServerConfig {
                         "while the mod drives the thunder flag,",
                         "so every bolt under a storm follows the mod's damage and fire rules",
                         "(the mod's own strikes can still spring a skeleton trap).",
-                        "This also drops lightning other mods or datapacks spawn from block ticks during a storm.")
+                        "This also drops lightning other mods spawn from random block ticks during a storm.")
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "suppressVanillaLightning")
                 .define("suppressVanillaLightning", true);
 

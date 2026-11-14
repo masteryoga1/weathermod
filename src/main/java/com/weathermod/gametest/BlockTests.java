@@ -1,5 +1,6 @@
 package com.weathermod.gametest;
 
+import com.weathermod.block.DeflectorMath;
 import com.weathermod.block.TornadoSirenBlock;
 import com.weathermod.block.WeatherBlocks;
 import com.weathermod.config.DestructionMode;
@@ -114,7 +115,8 @@ final class BlockTests {
 
     /**
      * An unsteered tornado that the wind carries straight at a weather deflector never enters the deflector's
-     * circle and still gets past it: it slides around and ends up downwind of the deflector.
+     * circle and still gets past it: it slides around and ends up downwind of the deflector. It slides on every
+     * tick, so it never comes as near as a push out of the circle would leave it.
      */
     static void unsteeredTornadoSlidesAroundDeflector(GameTestHelper helper) {
         TestBed bed = TestBed.begin(helper);
@@ -138,6 +140,9 @@ final class BlockTests {
             closest[0] = Math.min(closest[0], distance);
             bed.expect(distance >= keepOut - 0.01,
                 "The tornado is " + distance + " blocks from the deflector, inside " + keepOut);
+            bed.expect(distance > keepOut + DeflectorMath.EDGE_MARGIN_BLOCKS,
+                "The tornado is " + distance + " blocks from the deflector: it presses against the circle of "
+                    + keepOut + " instead of sliding around it");
         });
         bed.succeedWhen(() -> {
             bed.expect(bed.data.find(id).isPresent(), "The tornado ended before it got past the deflector");
@@ -145,6 +150,40 @@ final class BlockTests {
             bed.expect(storm.x() > hub.x + keepOut + 5.0, "The tornado is not past the deflector after "
                 + helper.getTick() + " ticks: it is " + (storm.x() - hub.x) + " blocks east and "
                 + (storm.z() - hub.z) + " blocks south of it, heading " + storm.headingDegrees());
+        });
+    }
+
+    /**
+     * A deflector position that is still listed although its block is gone, as a crash between the save of a
+     * chunk and the next save of the dimension's data leaves it, steers nothing: a tornado next to it drops the
+     * entry and stays where it is. Blocks are left alone here, so the ripper, which asks about deflectors too,
+     * never runs. A stale entry is dropped as well when a deflector that still stands is listed before it.
+     */
+    static void staleDeflectorEntrySteersNothing(GameTestHelper helper) {
+        TestBed bed = TestBed.begin(helper);
+        bed.config(ServerConfig.deflectorRadius, SMALL_DEFLECTOR_RADIUS);
+        bed.config(ServerConfig.destructionMode, DestructionMode.ENTITIES_ONLY);
+        BlockPos gone = bed.mid(0, 0, 0);
+        bed.expect(bed.data.deflectors().add(gone), "The index did not take the position");
+        Vec3 hub = Vec3.atBottomCenterOf(gone);
+        StormInstance storm = bed.spawnStorm("tornado_ef3", hub.x + 3.0, hub.z, 1.0F);
+        storm.steer(0.0F, 0.0F);
+        bed.after(5, () -> {
+            bed.expect(!bed.data.deflectors().contains(gone),
+                "The position of a deflector that is gone is still listed with a tornado next to it");
+            double distance = storm.distanceTo(hub.x, hub.z);
+            bed.expect(distance < 3.5,
+                "A deflector that is gone pushed the tornado " + distance + " blocks away from itself");
+
+            BlockPos standing = bed.mid(2, 0, 0);
+            bed.deflector(standing);
+            bed.expect(bed.data.deflectors().add(gone), "The index did not take the position a second time");
+            List<BlockPos> live = ProtectedActions.liveDeflectors(bed.level,
+                bed.data.deflectors().covering(hub.x, hub.z, SMALL_DEFLECTOR_RADIUS));
+            bed.expect(live.equals(List.of(standing)), "Expected only the deflector that stands, got " + live);
+            bed.expect(!bed.data.deflectors().contains(gone),
+                "The position of a deflector that is gone is still listed behind one that stands");
+            bed.succeed();
         });
     }
 

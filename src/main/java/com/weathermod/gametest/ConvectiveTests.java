@@ -137,8 +137,9 @@ final class ConvectiveTests {
 
     /**
      * Parks a hailstorm so that its hail core lies on the scene and forces a hail burst. A pig under the open sky
-     * is hurt by hail, a pig under a roof never is. Without {@code hailKillsMobs} the exposed pig is taken down to
-     * the health floor of one heart and stays there; with it the pig dies.
+     * is hurt by hail, a pig under a roof never is, whether the roof is bedrock or glass, which lets the sky light
+     * through. Without {@code hailKillsMobs} the exposed pig is taken down to the health floor of one heart and
+     * stays there; with it the pig dies.
      */
     static void hail(GameTestHelper helper, boolean killsMobs) {
         TestBed bed = TestBed.begin(helper);
@@ -147,10 +148,14 @@ final class ConvectiveTests {
         Vec3 centre = bed.centre();
         BlockPos open = bed.mid(-3, 0, 0);
         BlockPos roofed = bed.mid(3, 0, 0);
+        BlockPos glazed = bed.mid(0, 0, 3);
         pen(bed, open, false);
         pen(bed, roofed, true);
+        pen(bed, glazed, false);
+        bed.set(glazed.above(), Blocks.GLASS);
         Pig exposed = bed.spawn(EntityType.PIG, open);
         Pig sheltered = bed.spawn(EntityType.PIG, roofed);
+        Pig underGlass = bed.spawn(EntityType.PIG, glazed);
         float full = sheltered.getMaxHealth();
         bed.player(centre);
         boolean[] hailing = {false};
@@ -177,6 +182,8 @@ final class ConvectiveTests {
         bed.eachTick(() -> {
             bed.expect(sheltered.isAlive() && sheltered.getHealth() == full,
                 "The pig under the roof was hurt, health " + sheltered.getHealth());
+            bed.expect(underGlass.isAlive() && underGlass.getHealth() == full,
+                "The pig under the glass roof was hurt, health " + underGlass.getHealth());
             if (!killsMobs) {
                 bed.expect(exposed.isAlive() && exposed.getHealth() >= HailSystem.HAIL_MOB_HEALTH_FLOOR,
                     "Hail took the exposed pig below the health floor: " + exposed.getHealth());

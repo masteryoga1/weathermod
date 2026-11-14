@@ -1,6 +1,7 @@
 package com.weathermod.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.joml.Vector3d;
@@ -9,7 +10,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Pins the push of straight wind: the threshold, slope and cap of the acceleration, the envelope and the radial
  * profile of a downburst, how ambient wind and storm outflow add up as vectors, and where a downburst pushes
- * outward and where down. Needs no Minecraft bootstrap.
+ * outward and where down, and how far above and below the surface it is felt. Needs no Minecraft bootstrap.
  */
 class WindForceTest {
     private static final float EPSILON = 1.0E-6F;
@@ -36,6 +37,7 @@ class WindForceTest {
         assertEquals(1.5F, WindForce.DOWNBURST_REACH_FACTOR);
         assertEquals(20, WindForce.DOWNBURST_RAMP_TICKS);
         assertEquals(40, WindForce.DOWNBURST_DECAY_TICKS);
+        assertEquals(32.0D, WindForce.DOWNBURST_VERTICAL_REACH_BLOCKS);
     }
 
     @Test
@@ -284,5 +286,20 @@ class WindForceTest {
         WindForce.addDownburst(CENTRE_X, CENTRE_Z, 0.0F, SPEED, 1.0F, CENTRE_X, CENTRE_Z, out);
         WindForce.addDownburst(CENTRE_X, CENTRE_Z, -8.0F, SPEED, 1.0F, CENTRE_X + 1.0D, CENTRE_Z, out);
         assertEquals(new Vector3d(), out);
+    }
+
+    @Test
+    void downburstIsFeltNearTheSurfaceOnly() {
+        double surface = 64.0D;
+        assertTrue(WindForce.downburstReachesHeight(surface, surface), "on the ground");
+        assertTrue(WindForce.downburstReachesHeight(surface + 20.0D, surface), "in the air above it");
+        assertTrue(WindForce.downburstReachesHeight(surface - 20.0D, surface), "in a cellar");
+        assertTrue(WindForce.downburstReachesHeight(surface + 32.0D, surface), "the reach itself counts");
+        assertTrue(WindForce.downburstReachesHeight(surface - 32.0D, surface), "the reach itself counts below too");
+        assertFalse(WindForce.downburstReachesHeight(surface + 32.01D, surface), "too high above the surface");
+        assertFalse(WindForce.downburstReachesHeight(surface - 32.01D, surface), "a mine far below the surface");
+        assertFalse(WindForce.downburstReachesHeight(surface - 40.0D, surface));
+        assertTrue(WindForce.downburstReachesHeight(-50.0D, -60.0D), "heights below zero");
+        assertFalse(WindForce.downburstReachesHeight(Double.NaN, surface), "a height that is not a number");
     }
 }

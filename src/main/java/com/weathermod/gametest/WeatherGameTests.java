@@ -161,6 +161,8 @@ public final class WeatherGameTests {
             BlockTests::deflectorKeepsTornadoOut);
         add(tests, "unsteered_tornado_slides_around_deflector", TestBed.PLATFORM, VERY_LONG_TICKS,
             BlockTests::unsteeredTornadoSlidesAroundDeflector);
+        add(tests, "stale_deflector_entry_steers_nothing", TestBed.PLATFORM, SHORT_TICKS,
+            BlockTests::staleDeflectorEntrySteersNothing);
         add(tests, "siren_follows_tornado", TestBed.PLATFORM, LONG_TICKS, BlockTests::sirenFollowsTornado);
         add(tests, "siren_ignores_small_vortex_and_obeys_redstone", TestBed.PLATFORM, MEDIUM_TICKS,
             BlockTests::sirenIgnoresSmallVortexAndObeysRedstone);

@@ -18,6 +18,9 @@ import org.jetbrains.annotations.Nullable;
  * mod id in its text, or carries an exception that names the mod id or passed through the mod's code. That covers
  * the datapack loaders, which report a broken tag, recipe or loot table by its id, and the simulation. Lines of
  * the game test framework itself are left out: it reports failed tests there, and those are counted elsewhere.
+ * So is the config loader's note that it corrected a config file. It is written only about a file that an earlier
+ * run left in the run directory and that no longer matches the config's definition; a missing file is created
+ * silently.
  *
  * <p>The watch is attached to the root logger once, when the tests are registered, which is before the datapacks
  * load. Without the logging backend the server ships with it stays inactive and {@link #isActive()} says so.
@@ -27,6 +30,8 @@ final class LogWatch extends AbstractAppender {
     private static final String MOD_MARKER = "weathermod";
     private static final String MOD_PACKAGE = "com.weathermod";
     private static final String FRAMEWORK_PACKAGE = "net.minecraft.gametest";
+    private static final String CONFIG_LOADER = "net.neoforged.fml.config.ConfigTracker";
+    private static final String CONFIG_CORRECTED_SUFFIX = "is not correct. Correcting";
     private static final int MAX_LINES = 2000;
 
     @Nullable
@@ -80,6 +85,9 @@ final class LogWatch extends AbstractAppender {
             return;
         }
         String message = event.getMessage() == null ? "" : event.getMessage().getFormattedMessage();
+        if (logger.equals(CONFIG_LOADER) && message.endsWith(CONFIG_CORRECTED_SUFFIX)) {
+            return;
+        }
         Throwable thrown = event.getThrown();
         if (!logger.startsWith(MOD_PACKAGE) && !mentionsMod(message) && !concernsMod(thrown)) {
             return;
