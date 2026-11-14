@@ -1,0 +1,41 @@
+{
+  "values": [
+    "#minecraft:wither_immune",
+    {
+      "id": "#c:relocation_not_supported",
+      "required": false
+    },
+    "#minecraft:shulker_boxes",
+    "#minecraft:portals",
+    "minecraft:spawner",
+    "minecraft:trial_spawner",
+    "minecraft:vault",
+    "minecraft:beacon",
+    "minecraft:conduit",
+    "minecraft:respawn_anchor",
+    "minecraft:lodestone",
+    "minecraft:enchanting_table",
+    "minecraft:ender_chest",
+    "minecraft:budding_amethyst",
+    "minecraft:dragon_egg",
+    "minecraft:heavy_core",
+    "weathermod:tornado_siren",
+    "weathermod:weather_deflector",
+    {
+      "id": "create:piston_extension_pole",
+      "required": false
+    },
+    {
+      "id": "create:mechanical_piston_head",
+      "required": false
+    },
+    {
+      "id": "create:rope",
+      "required": false
+    },
+    {
+      "id": "create:pulley_magnet",
+      "required": false
+    }
+  ]
+}

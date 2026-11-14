@@ -20,6 +20,13 @@ jobs:
       - name: Build
         run: ./gradlew build --no-daemon
 
+      - name: Game tests
+        # The server exits with 0 when it fails before any test has run, so the line it logs once every
+        # required test has passed is asked for as well.
+        run: |
+          ./gradlew runGameTestServer --no-daemon
+          grep -q "required tests passed" run/logs/latest.log
+
       - uses: actions/upload-artifact@v4
         with:
           name: weathermod

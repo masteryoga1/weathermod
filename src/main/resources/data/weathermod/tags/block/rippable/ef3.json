@@ -1,0 +1,23 @@
+{
+  "values": [
+    "#weathermod:rippable/ef2",
+    "#minecraft:logs",
+    "#minecraft:dirt",
+    "minecraft:clay",
+    "#minecraft:terracotta",
+    {
+      "id": "#c:sandstone/blocks",
+      "required": false
+    },
+    "minecraft:netherrack",
+    "minecraft:soul_sand",
+    "minecraft:soul_soil",
+    "minecraft:farmland",
+    "minecraft:dirt_path",
+    "minecraft:packed_mud",
+    "#minecraft:nylium",
+    "#minecraft:fences",
+    "minecraft:cobblestone",
+    "minecraft:mossy_cobblestone"
+  ]
+}

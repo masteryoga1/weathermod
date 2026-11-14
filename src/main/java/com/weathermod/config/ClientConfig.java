@@ -4,7 +4,8 @@ import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
  * Client-only settings: how dense, hazy and loud the weather is drawn, which of the client weather systems run
- * (rain level driver, precipitation renderer, haze and wind particles) and the debug overlay toggle.
+ * (rain level driver, precipitation renderer, haze and wind particles, hail and debris particles, the ground
+ * shadow under a funnel, delayed thunder) and the debug overlay toggle.
  * Stored in {@code config/weathermod-client.toml}.
  */
 public final class ClientConfig {
@@ -24,6 +25,14 @@ public final class ClientConfig {
     public static final ModConfigSpec.BooleanValue hazeParticles;
     /** Whether dust and leaf particles are spawned when the wind blows hard. */
     public static final ModConfigSpec.BooleanValue windParticles;
+    /** Whether falling and bouncing hailstones are drawn. */
+    public static final ModConfigSpec.BooleanValue hailParticles;
+    /** Whether debris, dust and spray are drawn around funnels and downbursts. */
+    public static final ModConfigSpec.BooleanValue debrisParticles;
+    /** Whether a dark disc is drawn under a funnel while no shader pack is active. */
+    public static final ModConfigSpec.BooleanValue funnelGroundShadow;
+    /** Whether the vanilla thunder of mod lightning is replaced by thunder that arrives after the flash. */
+    public static final ModConfigSpec.BooleanValue delayedThunder;
 
     /** The built specification handed to NeoForge. */
     public static final ModConfigSpec SPEC;
@@ -44,7 +53,8 @@ public final class ClientConfig {
                 .defineInRange("hazeStrength", 1.0D, 0.0D, 2.0D);
 
         soundVolume = builder
-                .comment("Volume of wind, rain and storm sounds played by the mod, on top of the game's weather volume.")
+                .comment("Volume of wind, rain and storm sounds played by the mod,",
+                        "on top of the game's weather volume.")
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "soundVolume")
                 .defineInRange("soundVolume", 1.0D, 0.0D, 1.0D);
 
@@ -75,6 +85,26 @@ public final class ClientConfig {
                 .comment("Spawn dust and leaves blown by the wind.")
                 .translation(ConfigSetup.TRANSLATION_PREFIX + "windParticles")
                 .define("windParticles", true);
+
+        hailParticles = builder
+                .comment("Draw falling and bouncing hailstones.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "hailParticles")
+                .define("hailParticles", true);
+
+        debrisParticles = builder
+                .comment("Draw debris, dust and spray around funnels and downbursts.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "debrisParticles")
+                .define("debrisParticles", true);
+
+        funnelGroundShadow = builder
+                .comment("Draw a dark disc under a funnel when no shader pack is active.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "funnelGroundShadow")
+                .define("funnelGroundShadow", true);
+
+        delayedThunder = builder
+                .comment("Replace vanilla thunder of mod lightning by thunder that arrives after the flash.")
+                .translation(ConfigSetup.TRANSLATION_PREFIX + "delayedThunder")
+                .define("delayedThunder", true);
 
         SPEC = builder.build();
     }

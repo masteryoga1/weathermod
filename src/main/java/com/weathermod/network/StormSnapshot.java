@@ -7,26 +7,37 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Immutable view of one storm exactly as the server sends it to clients. The twelve values are grouped into three
+ * Immutable view of one storm exactly as the server sends it to clients. The fourteen values are grouped into four
  * nested records so every stream codec stays within the six-field limit of {@link StreamCodec#composite}; the flat
  * constructor and accessors hide that grouping from callers.
  */
-public record StormSnapshot(StormIdentity identity, StormMotion motion, StormLife life) {
-    /** Network codec. It only needs a plain {@link ByteBuf}, so it also feeds the payload codecs over registry buffers. */
+public record StormSnapshot(StormIdentity identity, StormMotion motion, StormLife life, StormDetail detail) {
+    /**
+     * Network codec. It only needs a plain {@link ByteBuf}, so it also feeds the payload codecs over registry
+     * buffers.
+     */
     public static final StreamCodec<ByteBuf, StormSnapshot> STREAM_CODEC = StreamCodec.composite(
         StormIdentity.STREAM_CODEC, StormSnapshot::identity,
         StormMotion.STREAM_CODEC, StormSnapshot::motion,
         StormLife.STREAM_CODEC, StormSnapshot::life,
+        StormDetail.STREAM_CODEC, StormSnapshot::detail,
         StormSnapshot::new);
 
     public StormSnapshot {
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(motion, "motion");
         Objects.requireNonNull(life, "life");
+        Objects.requireNonNull(detail, "detail");
+    }
+
+    /** A snapshot without family detail: no parent and no hail ({@link StormDetail#NONE}). */
+    public StormSnapshot(StormIdentity identity, StormMotion motion, StormLife life) {
+        this(identity, motion, life, StormDetail.NONE);
     }
 
     /**
-     * Flat constructor used by the server when it snapshots a storm instance.
+     * Flat constructor for a storm without family detail: no parent and no hail ({@link StormDetail#NONE}). Use
+     * {@link #withDetail} to add them.
      *
      * @param id             storm id, unique within its dimension
      * @param typeId         id of the weather type in the {@code weathermod:weather_type} registry
@@ -46,7 +57,13 @@ public record StormSnapshot(StormIdentity identity, StormMotion motion, StormLif
                          int maxAgeTicks) {
         this(new StormIdentity(id, typeId),
             new StormMotion(x, y, z, headingDegrees, speed),
-            new StormLife(intensity, radius, interestRadius, ageTicks, maxAgeTicks));
+            new StormLife(intensity, radius, interestRadius, ageTicks, maxAgeTicks),
+            StormDetail.NONE);
+    }
+
+    /** The same storm with another family detail. */
+    public StormSnapshot withDetail(StormDetail detail) {
+        return new StormSnapshot(identity, motion, life, detail);
     }
 
     /** Storm id, unique within its dimension. */
@@ -103,6 +120,16 @@ public record StormSnapshot(StormIdentity identity, StormMotion motion, StormLif
 
     public int maxAgeTicks() {
         return life.maxAgeTicks();
+    }
+
+    /** Id of the storm that spawned this one; 0 when it has no parent. */
+    public int parentId() {
+        return detail.parentId();
+    }
+
+    /** Current hail strength in {@code [0, 1]}; 0 while no hail falls. */
+    public float hail() {
+        return detail.hail();
     }
 
     /** Ticks left before the storm expires, never negative. */
@@ -175,5 +202,22 @@ public record StormSnapshot(StormIdentity identity, StormMotion motion, StormLif
             ByteBufCodecs.VAR_INT, StormLife::ageTicks,
             ByteBufCodecs.VAR_INT, StormLife::maxAgeTicks,
             StormLife::new);
+    }
+
+    /**
+     * What the storm's family adds: the storm it was spawned by and how hard it hails.
+     *
+     * @param parentId id of the storm that spawned this one; 0 when it has no parent
+     * @param hail     current hail strength in {@code [0, 1]}; 0 while no hail falls
+     */
+    public record StormDetail(int parentId, float hail) {
+        /** No parent and no hail: the detail of every storm outside the convective and vortex families. */
+        public static final StormDetail NONE = new StormDetail(0, 0.0F);
+
+        /** Network codec: the parent id as a var int, the hail strength as a float. */
+        public static final StreamCodec<ByteBuf, StormDetail> STREAM_CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, StormDetail::parentId,
+            ByteBufCodecs.FLOAT, StormDetail::hail,
+            StormDetail::new);
     }
 }

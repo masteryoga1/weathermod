@@ -1,22 +1,32 @@
 package com.weathermod.server;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherTypes;
 import com.weathermod.server.director.DirectorState;
+import java.util.List;
+import java.util.Set;
+import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.util.RandomSource;
 import org.junit.jupiter.api.Test;
 
 /**
  * Round-trips a dimension's weather through the saved-data tag and checks the repairs {@code load} applies to a
- * damaged tag and the defaults a first-milestone tag falls back to. Needs no Minecraft bootstrap: the registry
- * lookup is never used by save or load and the climate field is only built on demand.
+ * damaged tag, the defaults a tag of an earlier milestone falls back to, the headroom for child storms, the queue
+ * of children and what removing a storm does to the runtime. Needs no Minecraft bootstrap: the registry lookup is
+ * never used by save or load, the climate field is only built on demand and the weather types are hand-written
+ * holders.
  */
 class DimensionWeatherDataNbtTest {
     private static final float EPSILON = 1.0E-5F;
@@ -26,6 +36,8 @@ class DimensionWeatherDataNbtTest {
     private static final String KEY_WIND = "Wind";
     private static final String KEY_TICK_COUNTER = "TickCounter";
     private static final String KEY_DIRECTOR = "Director";
+    private static final String KEY_DEFLECTORS = "Deflectors";
+    private static final String KEY_TEMP_FIRES = "TempFires";
 
     private static StormInstance storm(int id, String type, double x, double z) {
         return new StormInstance(id, WeatherRegistries.key(type), x, 160.0D, z, 215.5F, 3.25F, 0.8F, 600, 2400,
@@ -187,5 +199,177 @@ class DimensionWeatherDataNbtTest {
 
         data.clear();
         assertEquals(0, data.naturalStormCount());
+    }
+
+    @Test
+    void secondMilestoneTagIsSavedBackWithoutTheNewKeys() {
+        CompoundTag tag = new CompoundTag();
+        tag.put(KEY_STORMS, listOf(storm(1, "rain", 0.0D, 0.0D), storm(2, "fog", 40.0D, -8.0D)));
+        tag.putInt(KEY_NEXT_STORM_ID, 3);
+        tag.put(KEY_WIND, new WindState(90.0F, 4.0F).save());
+        tag.putInt(KEY_TICK_COUNTER, 50);
+        tag.put(KEY_DIRECTOR, new DirectorState(1200, false, 4000L, 2).save());
+
+        DimensionWeatherData data = DimensionWeatherData.load(tag, null);
+
+        assertEquals(0, data.deflectors().size(), "a tag without deflectors loads an empty index");
+        assertTrue(data.temporaryFires().isEmpty(), "a tag without temporary fires loads an empty list");
+        assertEquals(0L, data.director().severeReadyGameTime);
+        assertFalse(data.storms().get(0).isChild());
+
+        CompoundTag saved = data.save(new CompoundTag(), null);
+        assertEquals(tag, saved, "a tag of the second milestone is saved back unchanged");
+        assertEquals(Set.of(KEY_STORMS, KEY_NEXT_STORM_ID, KEY_WIND, KEY_TICK_COUNTER, KEY_DIRECTOR),
+            saved.getAllKeys());
+        assertFalse(saved.contains(KEY_DEFLECTORS));
+        assertFalse(saved.contains(KEY_TEMP_FIRES));
+    }
+
+    @Test
+    void deflectorsAndTemporaryFiresSurviveASaveAndLoad() {
+        DimensionWeatherData data = new DimensionWeatherData();
+        BlockPos deflector = new BlockPos(100, 70, -200);
+        BlockPos fire = new BlockPos(-3, 40, 12);
+        assertTrue(data.deflectors().add(deflector));
+        assertTrue(data.temporaryFires().add(fire));
+
+        CompoundTag saved = data.save(new CompoundTag(), null);
+        assertTrue(saved.contains(KEY_DEFLECTORS, Tag.TAG_LONG_ARRAY));
+        assertArrayEquals(new long[] {deflector.asLong()}, saved.getLongArray(KEY_DEFLECTORS));
+        assertTrue(saved.contains(KEY_TEMP_FIRES, Tag.TAG_COMPOUND));
+
+        DimensionWeatherData loaded = DimensionWeatherData.load(saved, null);
+        assertEquals(1, loaded.deflectors().size());
+        assertTrue(loaded.deflectors().contains(deflector));
+        assertEquals(1, loaded.temporaryFires().size());
+        assertFalse(loaded.temporaryFires().add(fire), "the loaded list already holds the fire");
+
+        CompoundTag resaved = loaded.save(new CompoundTag(), null);
+        assertEquals(saved.get(KEY_DEFLECTORS), resaved.get(KEY_DEFLECTORS));
+        assertEquals(saved.get(KEY_TEMP_FIRES), resaved.get(KEY_TEMP_FIRES));
+
+        assertTrue(loaded.deflectors().remove(deflector));
+        loaded.temporaryFires().remove(fire);
+        CompoundTag emptied = loaded.save(new CompoundTag(), null);
+        assertFalse(emptied.contains(KEY_DEFLECTORS), "an empty index is not written");
+        assertFalse(emptied.contains(KEY_TEMP_FIRES), "an empty fire list is not written");
+    }
+
+    @Test
+    void deflectorsAndTemporaryFiresOfTheWrongTagTypeAreIgnored() {
+        CompoundTag tag = new CompoundTag();
+        tag.putString(KEY_DEFLECTORS, "not a long array");
+        tag.putInt(KEY_TEMP_FIRES, 3);
+
+        DimensionWeatherData data = DimensionWeatherData.load(tag, null);
+
+        assertEquals(0, data.deflectors().size());
+        assertTrue(data.temporaryFires().isEmpty());
+    }
+
+    @Test
+    void spawnChildRespectsTheHeadroom() {
+        DimensionWeatherData data = new DimensionWeatherData();
+        StormInstanceNbtTest.KeyedHolder holder = StormInstanceNbtTest.vortexHolder("tornado_ef0");
+        RandomSource random = RandomSource.create(5L);
+        int max = WeatherManager.maxStormsPerDimension();
+        assertEquals(WeatherManager.DEFAULT_MAX_STORMS_PER_DIMENSION, max, "no config is loaded in a unit test");
+
+        for (int i = 0; i < max; i++) {
+            assertNotNull(data.spawn(holder, i * 10.0D, 0.0D, random));
+        }
+        assertTrue(data.isFull());
+        assertNull(data.spawn(holder, 0.0D, 0.0D, random), "an ordinary storm is refused at the cap");
+
+        for (int i = 0; i < DimensionWeatherData.CHILD_STORM_HEADROOM; i++) {
+            StormInstance child = data.spawnChild(holder, 5.0D, 6.0D, i < 3 ? 1 : 2, random);
+            assertNotNull(child, "a child still fits into the headroom");
+            assertEquals(max + 1 + i, child.id(), "children take their ids from the same counter");
+            assertTrue(child.isChild());
+            assertFalse(child.isNatural());
+            assertEquals(5.0D, child.x());
+            assertEquals(6.0D, child.z());
+        }
+        assertEquals(max + DimensionWeatherData.CHILD_STORM_HEADROOM, data.storms().size());
+        assertTrue(data.isDirty());
+
+        int nextId = data.nextStormId();
+        assertNull(data.spawnChild(holder, 0.0D, 0.0D, 1, random), "the headroom is a hard limit");
+        assertEquals(nextId, data.nextStormId(), "a refused child uses up no id");
+
+        assertEquals(3, data.childCount(1));
+        assertEquals(1, data.childCount(2));
+        assertEquals(0, data.childCount(3));
+        assertEquals(0, data.childCount(0), "no storm has the id 0, so nothing is its child");
+        assertEquals(0, data.naturalStormCount(), "children are not natural storms");
+
+        assertTrue(data.remove(max + 1));
+        assertEquals(2, data.childCount(1), "a removed child no longer counts");
+        assertNotNull(data.spawnChild(holder, 0.0D, 0.0D, 2, random), "and frees its place in the headroom");
+        assertEquals(2, data.childCount(2));
+    }
+
+    @Test
+    void childQueueDrainsOnce() {
+        DimensionWeatherData data = new DimensionWeatherData();
+        assertTrue(data.drainChildQueue().isEmpty(), "nothing is queued in new data");
+
+        ChildSpawn first = new ChildSpawn(3, WeatherRegistries.key("tornado_ef0"), 1.0D, 2.0D);
+        CompoundTag family = new CompoundTag();
+        family.putInt("Count", 2);
+        ChildSpawn second = new ChildSpawn(4, WeatherRegistries.key("waterspout"), -5.0D, 9.0D, 600, family);
+        assertEquals(0, first.lifetimeTicks(), "the short form keeps the lifetime the type picks");
+        assertTrue(first.familyTag().isEmpty(), "and the family's default state");
+        assertEquals(600, second.lifetimeTicks());
+        assertEquals(0, new ChildSpawn(1, WeatherRegistries.key("waterspout"), 0.0D, 0.0D, -40, family)
+            .lifetimeTicks(), "a negative lifetime is no lifetime");
+
+        data.queueChild(first);
+        data.queueChild(second);
+        assertTrue(data.storms().isEmpty(), "queueing a child spawns nothing by itself");
+        CompoundTag saved = data.save(new CompoundTag(), null);
+        assertEquals(Set.of(KEY_STORMS, KEY_NEXT_STORM_ID, KEY_WIND, KEY_TICK_COUNTER, KEY_DIRECTOR),
+            saved.getAllKeys(), "the queue is never saved");
+
+        assertEquals(List.of(first, second), data.drainChildQueue(), "children come out in the order they went in");
+        assertTrue(data.drainChildQueue().isEmpty(), "the queue drains once");
+
+        assertThrows(NullPointerException.class, () -> data.queueChild(null));
+        assertThrows(NullPointerException.class, () -> new ChildSpawn(1, null, 0.0D, 0.0D));
+        assertThrows(NullPointerException.class,
+            () -> new ChildSpawn(1, WeatherRegistries.key("waterspout"), 0.0D, 0.0D, 0, null));
+    }
+
+    @Test
+    void removalPathsForgetTheRuntimeVortex() {
+        StormInstance expiring = new StormInstance(2, WeatherRegistries.key("placeholder"), 0.0D, 160.0D, 0.0D,
+            0.0F, 0.0F, 1.0F, 99, 100, 64.0F, 512.0F);
+        CompoundTag tag = new CompoundTag();
+        tag.put(KEY_STORMS, listOf(storm(1, "rain", 0.0D, 0.0D), expiring, storm(3, "rain", 0.0D, 0.0D),
+            storm(4, "rain", 0.0D, 0.0D)));
+        DimensionWeatherData data = DimensionWeatherData.load(tag, null);
+        StormRuntime runtime = data.runtime();
+        assertSame(runtime, data.runtime(), "one runtime per data object");
+        for (int id = 1; id <= 4; id++) {
+            runtime.putVortex(StormRuntimeTest.vortex(id));
+        }
+
+        assertTrue(data.remove(1));
+        assertNull(runtime.vortex(1), "a removed storm takes its vortex with it");
+        assertNotNull(runtime.vortex(2));
+        assertFalse(data.remove(1));
+
+        data.storms().get(0).tick(new WindState(0.0F, 0.0F), 1.0F);
+        List<StormInstance> expired = data.removeExpired();
+        assertEquals(1, expired.size());
+        assertEquals(2, expired.get(0).id());
+        assertNull(runtime.vortex(2), "an expired storm takes its vortex with it");
+        assertNotNull(runtime.vortex(3));
+        assertNotNull(runtime.vortex(4));
+
+        data.clear();
+        assertNull(runtime.vortex(3));
+        assertNull(runtime.vortex(4));
+        assertTrue(runtime.vortices().isEmpty(), "clearing the storms clears their vortices");
     }
 }

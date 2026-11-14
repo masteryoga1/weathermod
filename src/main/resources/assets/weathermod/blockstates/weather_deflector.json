@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "weathermod:block/weather_deflector"
+    }
+  }
+}

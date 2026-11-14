@@ -1,5 +1,6 @@
 package com.weathermod.server.director;
 
+import com.weathermod.core.TriggerContext;
 import com.weathermod.core.WeatherFamily;
 import com.weathermod.core.WeatherType;
 import com.weathermod.server.climate.ClimateSample;
@@ -14,8 +15,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 
 /**
- * Pure helpers that decide which weather type a natural spawn becomes: an eligibility test against the place and
- * climate, and a weighted pick among the types that passed it.
+ * Pure helpers that decide which weather type a natural spawn becomes: an eligibility test against the place, the
+ * climate, the type's trigger and the severe-weather cooldown, and a weighted pick among the types that passed it.
  */
 public final class TypeSelector {
     private TypeSelector() {
@@ -71,6 +72,7 @@ public final class TypeSelector {
     /**
      * True when a type may form naturally here: it spawns naturally at all, allows the dimension and the biome, its
      * climate window contains the sampled temperature and humidity, and its family has a system to simulate it.
+     * The type's trigger is not asked and a severe type is allowed.
      */
     public static boolean eligible(WeatherType type, ResourceKey<Level> dimension, Holder<Biome> biome,
                                    ClimateSample climate, Set<WeatherFamily> supportedFamilies) {
@@ -84,5 +86,21 @@ public final class TypeSelector {
             && type.allowsDimension(dimension)
             && type.allowsClimate(climate.temperature(), climate.humidity())
             && type.allowsBiome(biome);
+    }
+
+    /**
+     * As the five-argument {@link #eligible(WeatherType, ResourceKey, Holder, ClimateSample, Set)}, and also: the
+     * type's trigger accepts the context, and a severe type needs {@code severeAllowed}.
+     *
+     * @param context       the wind, the time of day and the front at the planned position
+     * @param severeAllowed whether the severe-weather cooldown lets a severe type form now
+     */
+    public static boolean eligible(WeatherType type, ResourceKey<Level> dimension, Holder<Biome> biome,
+                                   ClimateSample climate, Set<WeatherFamily> supportedFamilies,
+                                   TriggerContext context, boolean severeAllowed) {
+        Objects.requireNonNull(context, "context");
+        return eligible(type, dimension, biome, climate, supportedFamilies)
+            && (severeAllowed || !type.severe())
+            && type.trigger().accepts(context);
     }
 }

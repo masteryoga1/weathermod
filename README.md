@@ -15,3 +15,14 @@ working.
 ```
 
 The jar lands in `build/libs/`. `./gradlew runClient` starts a development client.
+
+## Testing
+
+`./gradlew build` runs the unit tests. The game tests start a headless server and play
+the weather out in a real world:
+
+```
+./gradlew runGameTestServer
+```
+
+The run has passed when its log (`run/logs/latest.log`) ends with "All ... required tests passed".

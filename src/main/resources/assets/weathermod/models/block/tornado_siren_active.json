@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/cube_bottom_top",
+  "textures": {
+    "bottom": "weathermod:block/tornado_siren_top",
+    "side": "weathermod:block/tornado_siren_side_active",
+    "top": "weathermod:block/tornado_siren_top"
+  }
+}

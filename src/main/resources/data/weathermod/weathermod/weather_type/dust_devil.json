@@ -1,0 +1,50 @@
+{
+  "family": "vortex",
+  "intensity": {
+    "min": 0.4,
+    "max": 1.0
+  },
+  "climate": {
+    "min_temperature": 1.2,
+    "max_temperature": 2.5,
+    "min_humidity": 0.0,
+    "max_humidity": 0.3
+  },
+  "duration_seconds": {
+    "min": 20.0,
+    "max": 180.0
+  },
+  "radius": 8.0,
+  "interest_radius": 192.0,
+  "weight": 3,
+  "visuals": {
+    "haze_strength": 0.1
+  },
+  "precipitation": "none",
+  "dimensions": [
+    "minecraft:overworld"
+  ],
+  "trigger": {
+    "max_wind": 6.0,
+    "time": "day"
+  },
+  "vortex": {
+    "kind": "dust_devil",
+    "tier": 0,
+    "core_radius": 1.8,
+    "top_radius": 3.0,
+    "influence_radius": 8.0,
+    "height": {
+      "min": 6.0,
+      "max": 30.0
+    },
+    "wind_speed": 5.0,
+    "pull": 0.02,
+    "lift": 0.03,
+    "rise_cap": 0.1,
+    "eject_height": 2.0,
+    "throw_speed": 0.0,
+    "min_speed": 0.3,
+    "max_speed": 2.0
+  }
+}

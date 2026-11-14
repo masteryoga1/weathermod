@@ -34,6 +34,69 @@ class WeatherTypeCodecTest {
     private static final String SHIPPED_DIRECTORY = "data/weathermod/weathermod/weather_type/";
     private static final ResourceLocation OVERWORLD = ResourceLocation.fromNamespaceAndPath("minecraft", "overworld");
     private static final ResourceLocation THE_NETHER = ResourceLocation.fromNamespaceAndPath("minecraft", "the_nether");
+    /** Every weather type file the mod ships, 26 in all. */
+    private static final List<String> SHIPPED_TYPES = List.of(
+        "placeholder", "overcast", "drizzle", "rain", "downpour", "snow", "sleet", "fog", "thunderstorm", "heat_haze",
+        "severe_thunderstorm", "hailstorm", "squall_line", "derecho", "supercell",
+        "tornado_ef0", "tornado_ef1", "tornado_ef2", "tornado_ef3", "tornado_ef4", "tornado_ef5",
+        "landspout", "waterspout", "gustnado", "dust_devil", "fire_whirl");
+    private static final int SHIPPED_CONVECTIVE_TYPES = 6;
+    private static final int SHIPPED_VORTEX_TYPES = 11;
+    /** A convective type that sets every field the third milestone added. */
+    private static final String FULL_CONVECTIVE_JSON = """
+        {
+          "family": "convective",
+          "severe": true,
+          "trigger": {"min_wind": 5.0, "max_wind": 20.0, "time": "night", "front": "cold", "front_weight": 3},
+          "convective": {
+            "lightning_per_minute": 11.0,
+            "lightning_fire_chance": 0.1,
+            "hail": 0.5,
+            "hail_damage": 1.5,
+            "hail_burst_seconds": {"min": 45.0, "max": 120.0},
+            "hail_gap_seconds": {"min": 30.0, "max": 90.0},
+            "downbursts_per_minute": 0.6,
+            "downburst_radius": 28.0,
+            "downburst_speed": 22.0,
+            "outflow_speed": 8.0,
+            "drift_multiplier": 1.6,
+            "tornado_chance": 0.6,
+            "max_tornado_tier": 3,
+            "small_vortex": "weathermod:gustnado",
+            "small_vortices_per_minute": 0.1,
+            "min_speed": 1.0
+          }
+        }
+        """;
+    /** A vortex type that sets every field of its vortex block. */
+    private static final String FULL_VORTEX_JSON = """
+        {
+          "family": "vortex",
+          "radius": 64.0,
+          "interest_radius": 768.0,
+          "precipitation": "none",
+          "severe": true,
+          "trigger": {"max_wind": 6.0, "time": "day"},
+          "vortex": {
+            "kind": "fire_whirl",
+            "tier": 3,
+            "core_radius": 12.0,
+            "top_radius": 30.0,
+            "influence_radius": 64.0,
+            "height": {"min": 10.0, "max": 50.0},
+            "wind_speed": 23.0,
+            "pull": 0.102,
+            "lift": 0.17,
+            "rise_cap": 0.4,
+            "eject_height": 40.0,
+            "rip_share": 0.625,
+            "flying_block_share": 0.75,
+            "throw_speed": 16.0,
+            "min_speed": 0.8,
+            "max_speed": 2.9
+          }
+        }
+        """;
 
     private static WeatherType parse(String json) {
         DataResult<WeatherType> result = WeatherType.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(json));
@@ -90,6 +153,13 @@ class WeatherTypeCodecTest {
         assertEquals(List.of(OVERWORLD, THE_NETHER), type.dimensions());
         assertTrue(type.enabled());
         assertTrue(type.spawnsNaturally());
+        assertFalse(type.severe());
+        assertEquals(Optional.empty(), type.convective());
+        assertEquals(Optional.empty(), type.vortex());
+        assertEquals(Trigger.ANY, type.trigger());
+        assertEquals(1.0F, type.driftMultiplier(), EPSILON);
+        assertEquals(0.0F, type.minSpeed(), EPSILON);
+        assertEquals(WeatherType.UNLIMITED_SPEED, type.maxSpeed(), EPSILON);
     }
 
     @Test
@@ -120,7 +190,7 @@ class WeatherTypeCodecTest {
         assertEquals(0, type.weight());
         assertEquals(new WeatherType.Visuals(1.0F, 1.0F, 0.4F), type.visuals());
         assertSame(PrecipitationMode.SNOW, type.precipitation());
-        assertFalse(type.precipitates(), "only the precipitation family precipitates, whatever the mode says");
+        assertTrue(type.precipitates(), "a convective type with a precipitation mode drops something");
         assertEquals(Optional.of(TagKey.create(Registries.BIOME,
             ResourceLocation.fromNamespaceAndPath("weathermod", "has_weather/convective"))), type.biomes());
         assertEquals(List.of(OVERWORLD), type.dimensions());
@@ -202,7 +272,7 @@ class WeatherTypeCodecTest {
     }
 
     @Test
-    void precipitatesNeedsThePrecipitationFamilyAndAMode() {
+    void precipitatesNeedsAPrecipitatingFamilyAndAMode() {
         assertTrue(parse("{\"family\": \"precipitation\"}").precipitates());
         assertTrue(parse("{\"family\": \"precipitation\", \"precipitation\": \"auto\"}").precipitates());
         assertTrue(parse("{\"family\": \"precipitation\", \"precipitation\": \"rain\"}").precipitates());
@@ -211,7 +281,9 @@ class WeatherTypeCodecTest {
         assertFalse(parse("{\"family\": \"precipitation\", \"precipitation\": \"none\"}").precipitates());
         assertFalse(parse("{\"family\": \"obscurant\"}").precipitates());
         assertFalse(parse("{\"family\": \"obscurant\", \"precipitation\": \"rain\"}").precipitates());
-        assertFalse(parse("{\"family\": \"convective\", \"precipitation\": \"auto\"}").precipitates());
+        assertTrue(parse("{\"family\": \"convective\", \"precipitation\": \"auto\"}").precipitates());
+        assertTrue(parse("{\"family\": \"convective\"}").precipitates());
+        assertFalse(parse("{\"family\": \"convective\", \"precipitation\": \"none\"}").precipitates());
         assertFalse(parse("{\"family\": \"winter\", \"precipitation\": \"snow\"}").precipitates());
     }
 
@@ -416,6 +488,217 @@ class WeatherTypeCodecTest {
         WeatherType thunderstorm = shipped("thunderstorm");
         assertSame(WeatherFamily.CONVECTIVE, thunderstorm.family());
         assertSame(PrecipitationMode.AUTO, thunderstorm.precipitation());
-        assertFalse(thunderstorm.precipitates(), "convective storms are not driven by the precipitation family yet");
+        assertTrue(thunderstorm.precipitates(), "a thunderstorm rains: convective types precipitate");
+    }
+
+    @Test
+    void fullConvectiveJsonParsesEveryNewField() {
+        WeatherType type = parse(FULL_CONVECTIVE_JSON);
+
+        assertSame(WeatherFamily.CONVECTIVE, type.family());
+        assertTrue(type.severe());
+        assertEquals(new Trigger(5.0F, 20.0F, Trigger.TimeOfDay.NIGHT, Trigger.FRONT_COLD, 3), type.trigger());
+        assertEquals(Optional.of(new ConvectiveParams(11.0F, 0.1F, 0.5F, 1.5F, new WeatherType.Range(45.0F, 120.0F),
+            new WeatherType.Range(30.0F, 90.0F), 0.6F, 28.0F, 22.0F, 8.0F, 1.6F, 0.6F, 3,
+            Optional.of(ResourceLocation.fromNamespaceAndPath("weathermod", "gustnado")), 0.1F, 1.0F)),
+            type.convective());
+        assertEquals(Optional.empty(), type.vortex());
+        assertEquals(1.6F, type.driftMultiplier(), EPSILON);
+        assertEquals(1.0F, type.minSpeed(), EPSILON);
+        assertEquals(64.0F, type.maxSpeed(), EPSILON, "a type without a vortex block has no speed limit of its own");
+        assertTrue(type.precipitates());
+    }
+
+    @Test
+    void fullVortexJsonParsesEveryNewField() {
+        WeatherType type = parse(FULL_VORTEX_JSON);
+
+        assertSame(WeatherFamily.VORTEX, type.family());
+        assertTrue(type.severe());
+        assertEquals(new Trigger(0.0F, 6.0F, Trigger.TimeOfDay.DAY, "", 1), type.trigger());
+        assertEquals(Optional.empty(), type.convective());
+        assertEquals(Optional.of(new VortexParams(VortexKind.FIRE_WHIRL, 3, 12.0F, 30.0F, 64.0F,
+            new WeatherType.Range(10.0F, 50.0F), 23.0F, 0.102F, 0.17F, 0.4F, 40.0F, 0.625F, 0.75F, 16.0F, 0.8F,
+            2.9F)), type.vortex());
+        assertEquals(1.0F, type.driftMultiplier(), EPSILON, "only a convective block changes the drift");
+        assertEquals(0.8F, type.minSpeed(), EPSILON);
+        assertEquals(2.9F, type.maxSpeed(), EPSILON);
+        assertFalse(type.precipitates());
+    }
+
+    @Test
+    void everyNewFieldRoundTripsThroughJson() {
+        for (String json : List.of(FULL_CONVECTIVE_JSON, FULL_VORTEX_JSON)) {
+            WeatherType original = parse(json);
+
+            JsonObject encoded = encode(original).getAsJsonObject();
+            assertTrue(encoded.get("severe").getAsBoolean(), "severe is written when set: " + encoded);
+            assertTrue(encoded.has("trigger"), "a trigger other than the default is written: " + encoded);
+            assertEquals(original.convective().isPresent(), encoded.has("convective"), encoded.toString());
+            assertEquals(original.vortex().isPresent(), encoded.has("vortex"), encoded.toString());
+
+            WeatherType decoded = WeatherType.CODEC.parse(JsonOps.INSTANCE, encoded)
+                .getOrThrow(message -> new AssertionError("Failed to re-parse weather type: " + message));
+            assertEquals(original, decoded);
+        }
+    }
+
+    @Test
+    void everyNewFieldRoundTripsThroughTheStreamCodec() {
+        for (String json : List.of(FULL_CONVECTIVE_JSON, FULL_VORTEX_JSON)) {
+            WeatherType original = parse(json);
+
+            ByteBuf buffer = Unpooled.buffer();
+            try {
+                WeatherType.STREAM_CODEC.encode(buffer, original);
+                WeatherType decoded = WeatherType.STREAM_CODEC.decode(buffer);
+                assertEquals(original, decoded);
+                assertEquals(0, buffer.readableBytes(), "every byte is consumed");
+            } finally {
+                buffer.release();
+            }
+        }
+    }
+
+    @Test
+    void emptyConvectiveBlockIsKeptApartFromAMissingOne() {
+        WeatherType type = parse("{\"family\": \"convective\", \"convective\": {}}");
+
+        assertEquals(Optional.of(ConvectiveParams.NONE), type.convective());
+        JsonObject encoded = encode(type).getAsJsonObject();
+        assertEquals(2, encoded.size(), "family and the empty block are written: " + encoded);
+        assertEquals(0, encoded.getAsJsonObject("convective").size(), "defaults inside the block are omitted");
+        assertEquals(type, WeatherType.CODEC.parse(JsonOps.INSTANCE, encoded).getOrThrow());
+    }
+
+    @Test
+    void vortexBlockOnAnotherFamilyIsRejected() {
+        DataResult<WeatherType> result = WeatherType.CODEC.parse(JsonOps.INSTANCE,
+            JsonParser.parseString("{\"family\": \"precipitation\", \"vortex\": {\"kind\": \"tornado\"}}"));
+        assertTrue(result.error().isPresent(), "a vortex block needs the vortex family");
+
+        DataResult<WeatherType> convective = WeatherType.CODEC.parse(JsonOps.INSTANCE,
+            JsonParser.parseString("{\"family\": \"convective\", \"vortex\": {\"kind\": \"tornado\"}}"));
+        assertTrue(convective.error().isPresent(), "a convective type is not a vortex either");
+    }
+
+    @Test
+    void vortexFamilyWithoutAVortexBlockIsRejected() {
+        DataResult<WeatherType> result = WeatherType.CODEC.parse(JsonOps.INSTANCE,
+            JsonParser.parseString("{\"family\": \"vortex\"}"));
+        assertTrue(result.error().isPresent(), "a vortex type must say what vortex it is");
+
+        WeatherType minimal = parse("{\"family\": \"vortex\", \"vortex\": {\"kind\": \"tornado\"}}");
+        assertSame(VortexKind.TORNADO, minimal.vortex().orElseThrow().kind());
+    }
+
+    @Test
+    void convectiveBlockOnAnotherFamilyIsRejected() {
+        DataResult<WeatherType> result = WeatherType.CODEC.parse(JsonOps.INSTANCE,
+            JsonParser.parseString("{\"family\": \"precipitation\", \"convective\": {}}"));
+        assertTrue(result.error().isPresent(), "a convective block needs the convective family");
+
+        DataResult<WeatherType> vortex = WeatherType.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(
+            "{\"family\": \"vortex\", \"vortex\": {\"kind\": \"tornado\"}, \"convective\": {}}"));
+        assertTrue(vortex.error().isPresent(), "a vortex type takes no convective block");
+    }
+
+    @Test
+    void invalidNestedBlocksAreRejected() {
+        DataResult<WeatherType> badConvective = WeatherType.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(
+            "{\"family\": \"convective\", \"convective\": {\"hail\": 1.5}}"));
+        assertTrue(badConvective.error().isPresent(), "hail above 1 must fail the whole type");
+
+        DataResult<WeatherType> badVortex = WeatherType.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(
+            "{\"family\": \"vortex\", \"vortex\": {\"kind\": \"tornado\", \"tier\": 6}}"));
+        assertTrue(badVortex.error().isPresent(), "tier 6 must fail the whole type");
+
+        DataResult<WeatherType> badTrigger = WeatherType.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(
+            "{\"family\": \"precipitation\", \"trigger\": {\"front\": \"occluded\"}}"));
+        assertTrue(badTrigger.error().isPresent(), "an unknown front must fail the whole type");
+    }
+
+    @Test
+    void twelveArgumentConstructorEqualsTheParsedDefaults() {
+        WeatherType built = new WeatherType(WeatherFamily.PRECIPITATION, WeatherType.DEFAULT_INTENSITY,
+            WeatherType.Climate.ANY, WeatherType.DEFAULT_DURATION_SECONDS, WeatherType.DEFAULT_RADIUS,
+            WeatherType.DEFAULT_INTEREST_RADIUS, WeatherType.DEFAULT_WEIGHT, WeatherType.Visuals.NONE,
+            WeatherType.DEFAULT_PRECIPITATION, Optional.empty(), WeatherType.DEFAULT_DIMENSIONS, true);
+
+        assertEquals(parse("{\"family\": \"precipitation\"}"), built);
+        assertFalse(built.severe());
+        assertEquals(Optional.empty(), built.convective());
+        assertEquals(Optional.empty(), built.vortex());
+        assertSame(Trigger.ANY, built.trigger());
+        assertEquals(1, encode(built).getAsJsonObject().size(), "the new defaults are omitted when encoding");
+    }
+
+    @Test
+    void speedLimitsPreferTheVortexBlock() {
+        ConvectiveParams convective = new ConvectiveParams(0.0F, 0.0F, 0.0F, 0.0F, new WeatherType.Range(30.0F, 90.0F),
+            new WeatherType.Range(60.0F, 180.0F), 0.0F, 24.0F, 20.0F, 0.0F, 2.0F, 0.0F, 5, Optional.empty(), 0.0F,
+            1.5F);
+        VortexParams vortex = new VortexParams(VortexKind.TORNADO, 0, 3.0F, 10.0F, 24.0F, WeatherType.Range.of(0.0F),
+            8.0F, 0.034F, 0.05F, 0.15F, 4.0F, 0.0F, 0.0F, 6.0F, 0.8F, 3.5F);
+        WeatherType both = new WeatherType(WeatherFamily.VORTEX, WeatherType.DEFAULT_INTENSITY,
+            WeatherType.Climate.ANY, WeatherType.DEFAULT_DURATION_SECONDS, 24.0F, 512.0F, 0, WeatherType.Visuals.NONE,
+            PrecipitationMode.NONE, Optional.empty(), WeatherType.DEFAULT_DIMENSIONS, true, false,
+            Optional.of(convective), Optional.of(vortex), Trigger.ANY);
+        WeatherType convectiveOnly = new WeatherType(WeatherFamily.CONVECTIVE, WeatherType.DEFAULT_INTENSITY,
+            WeatherType.Climate.ANY, WeatherType.DEFAULT_DURATION_SECONDS, 24.0F, 512.0F, 0, WeatherType.Visuals.NONE,
+            PrecipitationMode.AUTO, Optional.empty(), WeatherType.DEFAULT_DIMENSIONS, true, false,
+            Optional.of(convective), Optional.empty(), Trigger.ANY);
+
+        assertEquals(0.8F, both.minSpeed(), EPSILON, "the vortex block's minimum wins");
+        assertEquals(3.5F, both.maxSpeed(), EPSILON);
+        assertEquals(2.0F, both.driftMultiplier(), EPSILON);
+        assertEquals(1.5F, convectiveOnly.minSpeed(), EPSILON);
+        assertEquals(WeatherType.UNLIMITED_SPEED, convectiveOnly.maxSpeed(), EPSILON);
+        assertEquals(64.0F, WeatherType.UNLIMITED_SPEED, EPSILON);
+    }
+
+    @Test
+    void everyShippedTypeParses() throws IOException {
+        assertEquals(26, SHIPPED_TYPES.size());
+        int convective = 0;
+        int vortex = 0;
+        for (String name : SHIPPED_TYPES) {
+            WeatherType type = shipped(name);
+            if (type.family() == WeatherFamily.CONVECTIVE) {
+                convective++;
+                assertTrue(type.precipitates(), name + " is convective and must precipitate");
+                assertTrue(type.convective().isPresent(), name + " ships a convective block");
+                assertEquals(Optional.empty(), type.vortex(), name);
+            } else if (type.family() == WeatherFamily.VORTEX) {
+                vortex++;
+                assertFalse(type.precipitates(), name + " is a vortex and must not precipitate");
+                assertTrue(type.vortex().isPresent(), name + " ships a vortex block");
+                assertEquals(Optional.empty(), type.convective(), name);
+            } else {
+                assertEquals(Optional.empty(), type.convective(), name);
+                assertEquals(Optional.empty(), type.vortex(), name);
+                assertFalse(type.severe(), name + " predates severe weather");
+                assertEquals(Trigger.ANY, type.trigger(), name + " predates triggers");
+            }
+        }
+        assertEquals(SHIPPED_CONVECTIVE_TYPES, convective, "shipped convective types");
+        assertEquals(SHIPPED_VORTEX_TYPES, vortex, "shipped vortex types");
+    }
+
+    @Test
+    void shippedThunderstormStrikesAndSpawnsLandspouts() throws IOException {
+        WeatherType thunderstorm = shipped("thunderstorm");
+
+        assertEquals(6, thunderstorm.weight());
+        assertTrue(thunderstorm.spawnsNaturally());
+        assertFalse(thunderstorm.severe());
+        ConvectiveParams params = thunderstorm.convective().orElseThrow();
+        assertEquals(5.5F, params.lightningPerMinute(), EPSILON);
+        assertEquals(0.05F, params.lightningFireChance(), EPSILON);
+        assertEquals(0.0F, params.hail(), EPSILON, "an ordinary thunderstorm does not hail");
+        assertEquals(Optional.of(ResourceLocation.fromNamespaceAndPath("weathermod", "landspout")),
+            params.smallVortex());
+        assertEquals(0.02F, params.smallVorticesPerMinute(), EPSILON);
+        assertEquals(1.0F, thunderstorm.driftMultiplier(), EPSILON);
     }
 }

@@ -1,0 +1,19 @@
+{
+  "values": [
+    "#minecraft:dirt",
+    "#minecraft:sand",
+    {
+      "id": "#c:gravels",
+      "required": false
+    },
+    "minecraft:gravel",
+    "minecraft:clay",
+    "#minecraft:base_stone_overworld",
+    "#minecraft:base_stone_nether",
+    "minecraft:soul_sand",
+    "minecraft:soul_soil",
+    "#minecraft:nylium",
+    "minecraft:farmland",
+    "minecraft:dirt_path"
+  ]
+}

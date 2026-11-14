@@ -1,0 +1,16 @@
+{
+  "variants": {
+    "active=false,powered=false": {
+      "model": "weathermod:block/tornado_siren"
+    },
+    "active=false,powered=true": {
+      "model": "weathermod:block/tornado_siren"
+    },
+    "active=true,powered=false": {
+      "model": "weathermod:block/tornado_siren_active"
+    },
+    "active=true,powered=true": {
+      "model": "weathermod:block/tornado_siren_active"
+    }
+  }
+}

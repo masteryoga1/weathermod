@@ -16,11 +16,21 @@
   },
   "radius": 160.0,
   "interest_radius": 768.0,
-  "weight": 0,
+  "weight": 6,
   "visuals": {
     "rain_level": 1.0,
     "thunder_level": 1.0,
     "haze_strength": 0.4
   },
-  "precipitation": "auto"
+  "precipitation": "auto",
+  "convective": {
+    "lightning_per_minute": 5.5,
+    "lightning_fire_chance": 0.05,
+    "downbursts_per_minute": 0.25,
+    "downburst_radius": 20.0,
+    "downburst_speed": 16.0,
+    "outflow_speed": 4.0,
+    "small_vortex": "weathermod:landspout",
+    "small_vortices_per_minute": 0.02
+  }
 }

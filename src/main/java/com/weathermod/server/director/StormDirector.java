@@ -1,6 +1,9 @@
 package com.weathermod.server.director;
 
 import com.weathermod.WeatherMod;
+import com.weathermod.core.Trigger;
+import com.weathermod.core.TriggerContext;
+import com.weathermod.core.VortexParams;
 import com.weathermod.core.WeatherFamily;
 import com.weathermod.core.WeatherRegistries;
 import com.weathermod.core.WeatherType;
@@ -8,6 +11,7 @@ import com.weathermod.server.DimensionWeatherData;
 import com.weathermod.server.StormInstance;
 import com.weathermod.server.WeatherManager;
 import com.weathermod.server.WindState;
+import com.weathermod.server.climate.ClimateField;
 import com.weathermod.server.climate.ClimateSample;
 import com.weathermod.server.family.FamilySystems;
 import java.util.ArrayList;
@@ -16,6 +20,7 @@ import java.util.Optional;
 import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
@@ -26,10 +31,11 @@ import net.neoforged.neoforge.event.level.SleepFinishedTimeEvent;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Decides when and where natural storms form and when they fade: every {@link #INTERVAL_TICKS} it dissipates storms
- * nobody has been near for a while, bends the heading of wind-driven storms toward the nearest player, and when its
- * timer runs out spawns a type that fits the climate upwind of the least covered player. Also ends the rain over
- * players who slept through the night.
+ * Decides when and where natural storms form and when they fade: every {@link #INTERVAL_TICKS} it keeps the
+ * severe-weather cooldown running, dissipates storms nobody has been near for a while, bends the heading of
+ * wind-driven storms toward the nearest player, and when its timer runs out spawns a type that fits the climate,
+ * the wind, the time of day and the front upwind of the least covered player. Also ends the rain over players who
+ * slept through the night.
  */
 @EventBusSubscriber(modid = WeatherMod.MOD_ID)
 public final class StormDirector {
@@ -49,13 +55,18 @@ public final class StormDirector {
 
     /**
      * One director pass; called by the simulator every tick and returning at once unless {@code tick} is a multiple
-     * of {@link #INTERVAL_TICKS}. Does nothing while paused, without players, or with a storm frequency of zero.
+     * of {@link #INTERVAL_TICKS}. The severe-weather cooldown is kept running on every pass: while a severe storm
+     * lives, natural or spawned by command, the mark from which the next one may form is pushed ahead, so the
+     * cooldown counts from the moment the last severe storm ends. Beyond that the pass does nothing while paused,
+     * without players, or with a storm frequency of zero.
      */
     public static void tick(ServerLevel level, DimensionWeatherData data, int tick) {
         if (tick % INTERVAL_TICKS != 0) {
             return;
         }
         DirectorState state = data.director();
+        state.severeReadyGameTime = SevereCooldown.update(state.severeReadyGameTime, level.getGameTime(),
+            severeAlive(level, data), WeatherManager.severeWeatherCooldownSeconds());
         if (state.paused) {
             return;
         }
@@ -81,8 +92,9 @@ public final class StormDirector {
 
     /**
      * Spawns a storm through the natural planner right now, anchored on a player: the timer is ignored but the storm
-     * cap still applies. With a type the storm is that type whatever the climate says; without one the type is picked
-     * exactly as a natural spawn picks it, and the result is empty when nothing fits.
+     * cap still applies. With a type the storm is that type whatever the climate, the type's trigger and the
+     * severe-weather cooldown say; without one the type is picked exactly as a natural spawn picks it, and the
+     * result is empty when nothing fits.
      *
      * @return the new storm, or empty when the dimension is full or no type fits
      */
@@ -110,6 +122,30 @@ public final class StormDirector {
     /** Whole seconds until the next spawn attempt in a level, rounded up; zero when one is due. */
     public static int secondsUntilNextAttempt(ServerLevel level) {
         return WeatherManager.get(level).director().secondsUntilAttempt();
+    }
+
+    /**
+     * Whole seconds until a severe storm may form naturally in a level, rounded up; zero exactly when one may form
+     * now. While a severe storm lives this is the whole configured cooldown, and at least one second, because the
+     * cooldown only starts to count down when that storm ends.
+     */
+    public static int severeCooldownSeconds(ServerLevel level) {
+        DimensionWeatherData data = WeatherManager.get(level);
+        long now = level.getGameTime();
+        boolean alive = severeAlive(level, data);
+        long ready = SevereCooldown.update(data.director().severeReadyGameTime, now, alive,
+            WeatherManager.severeWeatherCooldownSeconds());
+        int seconds = SevereCooldown.secondsLeft(ready, now);
+        return alive ? Math.max(1, seconds) : seconds;
+    }
+
+    /**
+     * The front lying over a horizontal position in a level, as the director sees it when it picks a type there:
+     * {@code ""} for none, {@link Trigger#FRONT_COLD} or {@link Trigger#FRONT_WARM}. A dimension whose climate does
+     * not follow the sky has no fronts.
+     */
+    public static String frontAt(ServerLevel level, double x, double z) {
+        return frontAt(level, WeatherManager.get(level), x, z);
     }
 
     /**
@@ -192,9 +228,51 @@ public final class StormDirector {
     }
 
     /**
+     * The front at a position from the temperature anomaly {@link FrontMath#SAMPLE_OFFSET_BLOCKS} upwind and
+     * downwind of it, along the dimension's wind at this moment.
+     */
+    private static String frontAt(ServerLevel level, DimensionWeatherData data, double x, double z) {
+        if (!ClimateField.followsSky(level.dimensionType())) {
+            return "";
+        }
+        ClimateField field = data.climate(level);
+        float windDirection = data.wind().directionDegrees();
+        long gameTime = level.getGameTime();
+        float upwind = field.temperatureAnomaly(FrontMath.upwindX(x, windDirection),
+            FrontMath.upwindZ(z, windDirection), gameTime);
+        float downwind = field.temperatureAnomaly(FrontMath.downwindX(x, windDirection),
+            FrontMath.downwindZ(z, windDirection), gameTime);
+        return FrontMath.frontAt(upwind, downwind);
+    }
+
+    /** Whether a storm lives in the dimension whose type, as far as it can be resolved, counts as severe weather. */
+    private static boolean severeAlive(ServerLevel level, DimensionWeatherData data) {
+        if (data.storms().isEmpty()) {
+            return false;
+        }
+        Optional<Registry<WeatherType>> registry = WeatherRegistries.optionalRegistry(level.registryAccess());
+        if (registry.isEmpty()) {
+            return false;
+        }
+        Registry<WeatherType> types = registry.get();
+        for (StormInstance storm : data.storms()) {
+            WeatherType type = types.get(storm.type());
+            if (type != null && type.severe()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * The shared spawn path of the timer and {@link #forceSpawn}: respects the storm cap, anchors on the given
      * player or the least covered one, picks a type at a provisional upwind position unless one is forced, re-plans
      * with that type's interest radius and spawns through {@code WeatherManager.spawnNatural}.
+     *
+     * <p>A type with a vortex block is small: planned as far upwind as other storms it would live and die unseen.
+     * It is planned within sight of the anchor instead, see {@link SpawnPlanner#nearUpwind}. Because that position
+     * differs from the provisional one a picked type was picked at, the type's biome rule is checked again there
+     * and the attempt is given up when it fails, so a waterspout planned from mid-ocean does not land on a beach.
      */
     private static Optional<StormInstance> attemptSpawn(ServerLevel level, DimensionWeatherData data,
                                                         DirectorState state, List<ServerPlayer> players,
@@ -217,15 +295,25 @@ public final class StormDirector {
         if (type == null) {
             SpawnPlanner.Plan provisional = SpawnPlanner.upwind(anchor.getX(), anchor.getZ(), windDirection,
                 PLANNING_INTEREST_RADIUS, 0.0F, driftSpeed, random);
-            Optional<Holder<WeatherType>> picked = pickType(level, data, provisional, random);
+            Optional<Holder<WeatherType>> picked = pickType(level, data, state, wind, provisional, random);
             if (picked.isEmpty()) {
                 return Optional.empty();
             }
             type = picked.get();
         }
 
-        SpawnPlanner.Plan plan = SpawnPlanner.upwind(anchor.getX(), anchor.getZ(), windDirection,
-            type.value().interestRadius(), type.value().radius(), driftSpeed, random);
+        SpawnPlanner.Plan plan;
+        Optional<VortexParams> vortex = type.value().vortex();
+        if (vortex.isPresent()) {
+            plan = SpawnPlanner.nearUpwind(anchor.getX(), anchor.getZ(), windDirection,
+                vortex.get().influenceRadius(), random);
+            if (forcedType == null && !type.value().allowsBiome(biomeAt(level, plan.x(), plan.z()))) {
+                return Optional.empty();
+            }
+        } else {
+            plan = SpawnPlanner.upwind(anchor.getX(), anchor.getZ(), windDirection,
+                type.value().interestRadius(), type.value().radius(), driftSpeed, random);
+        }
         StormInstance storm = WeatherManager.spawnNatural(level, type, plan.x(), plan.z());
         if (storm == null) {
             return Optional.empty();
@@ -240,24 +328,37 @@ public final class StormDirector {
 
     /**
      * Picks a natural type for a planned position: the climate is sampled there, the biome is read at sea level
-     * there without loading a chunk, and every natural type that passes {@link TypeSelector#eligible} enters a
-     * weighted pick.
+     * there without loading a chunk, the trigger context is built there from the gust speed, the clock and the
+     * front, and every natural type that passes {@link TypeSelector#eligible} enters a pick weighted by the type's
+     * spawn weight as its trigger scales it. The gust speed is the sustained speed when no gust blows. Severe types
+     * only pass while no severe storm lives and the severe-weather cooldown has run out.
      */
     private static Optional<Holder<WeatherType>> pickType(ServerLevel level, DimensionWeatherData data,
+                                                          DirectorState state, WindState wind,
                                                           SpawnPlanner.Plan plan, RandomSource random) {
         ClimateSample climate = data.climate(level).sample(level, plan.x(), plan.z());
-        int seaLevel = level.getChunkSource().getGenerator().getSeaLevel();
-        Holder<Biome> biome = level.getBiome(BlockPos.containing(plan.x(), seaLevel, plan.z()));
+        Holder<Biome> biome = biomeAt(level, plan.x(), plan.z());
         Set<WeatherFamily> supported = FamilySystems.supported();
+        boolean day = TriggerContext.isDay(level.getDayTime(), level.dimensionType().hasFixedTime());
+        TriggerContext context = new TriggerContext(wind.gustSpeed(), day, frontAt(level, data, plan.x(), plan.z()));
+        boolean severeAllowed = SevereCooldown.allows(state.severeReadyGameTime, level.getGameTime(),
+            severeAlive(level, data));
 
         List<TypeSelector.Candidate<Holder<WeatherType>>> candidates = new ArrayList<>();
         WeatherRegistries.naturalTypes(level.registryAccess()).forEach(holder -> {
             WeatherType type = holder.value();
-            if (TypeSelector.eligible(type, level.dimension(), biome, climate, supported)) {
-                candidates.add(new TypeSelector.Candidate<Holder<WeatherType>>(holder, type.weight()));
+            if (TypeSelector.eligible(type, level.dimension(), biome, climate, supported, context, severeAllowed)) {
+                candidates.add(new TypeSelector.Candidate<Holder<WeatherType>>(holder,
+                    type.trigger().weight(type.weight(), context)));
             }
         });
         return TypeSelector.pick(candidates, random);
+    }
+
+    /** The biome at sea level at a horizontal position, read without loading a chunk. */
+    private static Holder<Biome> biomeAt(ServerLevel level, double x, double z) {
+        int seaLevel = level.getChunkSource().getGenerator().getSeaLevel();
+        return level.getBiome(BlockPos.containing(x, seaLevel, z));
     }
 
     /** The player closest to a horizontal position, or {@code null} when the list is empty. */

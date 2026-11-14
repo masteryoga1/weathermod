@@ -1,0 +1,43 @@
+{
+  "family": "vortex",
+  "intensity": {
+    "min": 0.6,
+    "max": 1.0
+  },
+  "climate": {
+    "min_temperature": 0.4,
+    "max_temperature": 2.0,
+    "min_humidity": 0.4,
+    "max_humidity": 1.0
+  },
+  "duration_seconds": {
+    "min": 120.0,
+    "max": 600.0
+  },
+  "radius": 24.0,
+  "interest_radius": 448.0,
+  "weight": 2,
+  "visuals": {
+    "haze_strength": 0.2
+  },
+  "precipitation": "none",
+  "biomes": "weathermod:has_weather/waterspout",
+  "dimensions": [
+    "minecraft:overworld"
+  ],
+  "vortex": {
+    "kind": "waterspout",
+    "tier": 0,
+    "core_radius": 4.0,
+    "top_radius": 10.0,
+    "influence_radius": 24.0,
+    "wind_speed": 10.0,
+    "pull": 0.04,
+    "lift": 0.06,
+    "rise_cap": 0.15,
+    "eject_height": 6.0,
+    "throw_speed": 0.0,
+    "min_speed": 0.5,
+    "max_speed": 2.5
+  }
+}

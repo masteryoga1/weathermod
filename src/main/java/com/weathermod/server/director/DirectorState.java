@@ -2,13 +2,14 @@ package com.weathermod.server.director;
 
 import net.minecraft.SharedConstants;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.util.RandomSource;
 
 /**
  * The storm director's bookkeeping for one dimension: the countdown to the next natural spawn attempt, whether an
- * operator paused natural spawning, and when and how often it has spawned. Persisted inside the dimension's
- * weather data under {@code "Director"}; every key is optional on load so worlds saved before the director existed
- * start with a fresh state.
+ * operator paused natural spawning, when and how often it has spawned, and the game time from which the next
+ * natural severe storm may form. Persisted inside the dimension's weather data under {@code "Director"}; every key
+ * is optional on load so worlds saved before the director existed start with a fresh state.
  */
 public final class DirectorState {
     /** Smallest frequency multiplier the re-arm arithmetic accepts, so a tiny multiplier never overflows the timer. */
@@ -22,6 +23,7 @@ public final class DirectorState {
     private static final String KEY_PAUSED = "Paused";
     private static final String KEY_LAST_SPAWN_GAME_TIME = "LastSpawnGameTime";
     private static final String KEY_NATURAL_SPAWNS = "NaturalSpawns";
+    private static final String KEY_SEVERE_READY_GAME_TIME = "SevereReadyGameTime";
 
     /** Ticks left before the director tries to spawn a storm; zero or less means the next director tick tries. */
     public int ticksUntilAttempt;
@@ -31,26 +33,53 @@ public final class DirectorState {
     public long lastSpawnGameTime;
     /** How many storms the director has spawned in this dimension over the life of the world. */
     public int naturalSpawns;
+    /**
+     * Game time from which the next natural severe storm may form, see {@link SevereCooldown}; zero when no severe
+     * storm has lived in this dimension yet.
+     */
+    public long severeReadyGameTime;
 
-    /** A fresh state: not paused, nothing spawned yet, and the first attempt due at the next director tick. */
+    /**
+     * A fresh state: not paused, nothing spawned yet, no severe-weather cooldown running, and the first attempt due
+     * at the next director tick.
+     */
     public DirectorState() {
     }
 
-    /** A state with every field given, as loaded from NBT or built by tests. Negative counters are clamped to zero. */
+    /**
+     * A state with the four fields of the first director given and no severe-weather cooldown running. Negative
+     * counters are clamped to zero.
+     */
     public DirectorState(int ticksUntilAttempt, boolean paused, long lastSpawnGameTime, int naturalSpawns) {
+        this(ticksUntilAttempt, paused, lastSpawnGameTime, naturalSpawns, 0L);
+    }
+
+    /**
+     * A state with every field given, as loaded from NBT or built by tests. Negative counters and game times are
+     * clamped to zero.
+     */
+    public DirectorState(int ticksUntilAttempt, boolean paused, long lastSpawnGameTime, int naturalSpawns,
+                         long severeReadyGameTime) {
         this.ticksUntilAttempt = Math.max(0, ticksUntilAttempt);
         this.paused = paused;
         this.lastSpawnGameTime = Math.max(0L, lastSpawnGameTime);
         this.naturalSpawns = Math.max(0, naturalSpawns);
+        this.severeReadyGameTime = Math.max(0L, severeReadyGameTime);
     }
 
-    /** Writes the state to a new compound tag. */
+    /**
+     * Writes the state to a new compound tag. The severe-weather mark is written only when it is not zero, so a
+     * state saved before the mark existed is saved back unchanged.
+     */
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
         tag.putInt(KEY_TICKS_UNTIL_ATTEMPT, ticksUntilAttempt);
         tag.putBoolean(KEY_PAUSED, paused);
         tag.putLong(KEY_LAST_SPAWN_GAME_TIME, lastSpawnGameTime);
         tag.putInt(KEY_NATURAL_SPAWNS, naturalSpawns);
+        if (severeReadyGameTime != 0L) {
+            tag.putLong(KEY_SEVERE_READY_GAME_TIME, severeReadyGameTime);
+        }
         return tag;
     }
 
@@ -59,11 +88,15 @@ public final class DirectorState {
      * counters are clamped to zero, so a damaged or pre-director tag still loads.
      */
     public static DirectorState load(CompoundTag tag) {
+        long severeReady = tag.contains(KEY_SEVERE_READY_GAME_TIME, Tag.TAG_ANY_NUMERIC)
+            ? tag.getLong(KEY_SEVERE_READY_GAME_TIME)
+            : 0L;
         return new DirectorState(
             tag.getInt(KEY_TICKS_UNTIL_ATTEMPT),
             tag.getBoolean(KEY_PAUSED),
             tag.getLong(KEY_LAST_SPAWN_GAME_TIME),
-            tag.getInt(KEY_NATURAL_SPAWNS));
+            tag.getInt(KEY_NATURAL_SPAWNS),
+            severeReady);
     }
 
     /**
@@ -115,7 +148,8 @@ public final class DirectorState {
         return ticksUntilAttempt == that.ticksUntilAttempt
             && paused == that.paused
             && lastSpawnGameTime == that.lastSpawnGameTime
-            && naturalSpawns == that.naturalSpawns;
+            && naturalSpawns == that.naturalSpawns
+            && severeReadyGameTime == that.severeReadyGameTime;
     }
 
     @Override
@@ -124,12 +158,14 @@ public final class DirectorState {
         result = 31 * result + Boolean.hashCode(paused);
         result = 31 * result + Long.hashCode(lastSpawnGameTime);
         result = 31 * result + Integer.hashCode(naturalSpawns);
+        result = 31 * result + Long.hashCode(severeReadyGameTime);
         return result;
     }
 
     @Override
     public String toString() {
         return "DirectorState[ticksUntilAttempt=" + ticksUntilAttempt + ", paused=" + paused
-            + ", lastSpawnGameTime=" + lastSpawnGameTime + ", naturalSpawns=" + naturalSpawns + "]";
+            + ", lastSpawnGameTime=" + lastSpawnGameTime + ", naturalSpawns=" + naturalSpawns
+            + ", severeReadyGameTime=" + severeReadyGameTime + "]";
     }
 }

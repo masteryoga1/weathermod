@@ -6,8 +6,8 @@ import net.minecraft.util.RandomSource;
 
 /**
  * Pure geometry for the storm director: where to put a new storm so the wind carries it over the player it was
- * planned for, and how far a storm's heading may be turned toward the people who would see it. Headings follow
- * {@link Headings}: 0 is north, 90 is east.
+ * planned for, where to put a small vortex so that player sees it at all, and how far a storm's heading may be
+ * turned toward the people who would see it. Headings follow {@link Headings}: 0 is north, 90 is east.
  */
 public final class SpawnPlanner {
     /** Nearest spawn distance as a fraction of the type's interest radius. */
@@ -22,6 +22,14 @@ public final class SpawnPlanner {
     public static final float MAX_ARRIVAL_SECONDS = 240.0F;
     /** Nearest spawn distance as a fraction of the storm's own radius: the edge of its full coverage. */
     public static final float MIN_STORM_RADIUS_FRACTION = Coverage.FULL_FRACTION;
+    /** Nearest distance upwind of the anchor a small vortex is planned at, in blocks. */
+    public static final double NEAR_VORTEX_MIN_BLOCKS = 24.0;
+    /** Farthest distance upwind of the anchor a small vortex is planned at, in blocks. */
+    public static final double NEAR_VORTEX_MAX_BLOCKS = 64.0;
+    /** A small vortex is planned at least this far beyond its own influence radius from the anchor, in blocks. */
+    public static final double NEAR_VORTEX_EDGE_MARGIN_BLOCKS = 8.0;
+    /** Largest sideways offset of a small vortex, perpendicular to the wind, as a fraction of its distance. */
+    public static final double NEAR_VORTEX_LATERAL_FRACTION = 0.3;
 
     private SpawnPlanner() {
     }
@@ -65,6 +73,32 @@ public final class SpawnPlanner {
         double distance = Math.max(floor, Math.min(band, reach));
         double scale = band > 0.0D ? distance / band : 1.0D;
         double lateral = radius * LATERAL_JITTER_FRACTION * (random.nextFloat() * 2.0F - 1.0F) * scale;
+
+        float from = Headings.wrapDegrees(heading + 180.0F);
+        float side = Headings.wrapDegrees(heading + 90.0F);
+        double x = anchorX + Headings.directionX(from) * distance + Headings.directionX(side) * lateral;
+        double z = anchorZ + Headings.directionZ(from) * distance + Headings.directionZ(side) * lateral;
+        return new Plan(x, z, heading);
+    }
+
+    /**
+     * Plans a small vortex within sight of the anchor: upwind at a distance drawn evenly from
+     * {@code [max(NEAR_VORTEX_MIN_BLOCKS, influenceRadius + NEAR_VORTEX_EDGE_MARGIN_BLOCKS), NEAR_VORTEX_MAX_BLOCKS]}
+     * (the lower bound alone when it exceeds the upper), pushed sideways by up to
+     * {@link #NEAR_VORTEX_LATERAL_FRACTION} of that distance, heading where the wind blows. The lower bound keeps a
+     * new vortex from forming on top of the anchor: its field does not reach the anchor at birth. The random source
+     * is read twice: once for the distance, once for the sideways offset.
+     *
+     * @param influenceRadius how far the vortex acts from its base, in blocks; a negative value counts as zero
+     */
+    public static Plan nearUpwind(double anchorX, double anchorZ, float windDirectionDegrees, float influenceRadius,
+                                  RandomSource random) {
+        float heading = Headings.wrapDegrees(windDirectionDegrees);
+        double influence = influenceRadius > 0.0F ? influenceRadius : 0.0D;
+        double nearest = Math.max(NEAR_VORTEX_MIN_BLOCKS, influence + NEAR_VORTEX_EDGE_MARGIN_BLOCKS);
+        double farthest = Math.max(nearest, NEAR_VORTEX_MAX_BLOCKS);
+        double distance = nearest + (farthest - nearest) * random.nextFloat();
+        double lateral = distance * NEAR_VORTEX_LATERAL_FRACTION * (random.nextFloat() * 2.0F - 1.0F);
 
         float from = Headings.wrapDegrees(heading + 180.0F);
         float side = Headings.wrapDegrees(heading + 90.0F);
